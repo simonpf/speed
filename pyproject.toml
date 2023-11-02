@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speed"
+authors = [
+    {name = "Simon Pfreundschuh", email = "simon.pfreundschuh@colostate.edu"},
+]
+description = "The IPWG Satellite Precipitation Estimate Evaluation Dataset"
+readme = "README.md"
+requires-python = ">=3.7"
+keywords = ["geophysics", "sattelite_data", "precipitation", "rain", "esimtation"]
+license = {text = "MIT"}
+dependencies = [
+    "pytest",
+]
+dynamic = ["version"]
+
+[tool.setuptools]
+packages = ["speed"]
+
+[tool.setuptools.dynamic]
+version = {attr = "speed.VERSION"}
+
