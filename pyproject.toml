@@ -14,8 +14,13 @@ keywords = ["geophysics", "sattelite_data", "precipitation", "rain", "esimtation
 license = {text = "MIT"}
 dependencies = [
     "pytest",
+    "click",
+    "cmocean"
 ]
 dynamic = ["version"]
+
+[project.scripts]
+speed = "speed.cli:cli"
 
 [tool.setuptools]
 packages = ["speed"]

@@ -1,0 +1,11 @@
+name: spree
+
+channels:
+  - pytorch
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - poetry
+  - satpy
+  - notebook
