@@ -11,17 +11,19 @@ from pansat import FileRecord, TimeRange
 from pansat.products.ground_based import mrms
 
 
+ALL_DATASETS = {}
+
+
 class ReferenceData(ABC):
     """
     Class representing reference precipitation measurements.
     """
-    def __init__(
-            self,
-            domain,
-            pansat_product
-    ):
+
+    def __init__(self, name, domain, pansat_product):
+        self.name = name
         self.domain = domain
         self.pansat_product = pansat_product
+        ALL_DATASETS[self.name] = self
 
     @abstractmethod
     def load_reference_data(self, time_range: TimeRange):
@@ -39,3 +41,13 @@ class ReferenceData(ABC):
         """
 
 
+def get_reference_dataset(name: str) -> ReferenceData:
+    """
+    Retrieve reference dataset by its name.
+
+    Args:
+        name: The name of the dataset.
+
+    The dataset instance or 'None' if no such dataset is known.
+    """
+    return ALL_DATASETS.get(name, None)

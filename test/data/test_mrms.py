@@ -72,14 +72,18 @@ def test_resample_categorical(mrms_precip_flag):
         assert label in expected_labels
 
 
-def test_load_mrms_data(mrms_granule):
+def test_load_mrms_data(mrms_match):
     """
     Test loading of MRMS data and ensure that the results dataset
         - Contains a 'surface_precip' variable
         - Contains a 'precip_flag' variable
         - Contains a 'radar_quality_index' variable
     """
-    reference_data = mrms_data.load_reference_data(mrms_granule)
+    input_granule, mrms_granules = mrms_match
+    reference_data = mrms_data.load_reference_data(
+        input_granule,
+        mrms_granules
+    )
 
     assert "surface_precip" in reference_data
     assert "precip_flag" in reference_data

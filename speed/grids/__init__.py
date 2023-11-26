@@ -11,12 +11,14 @@ from pathlib import Path
 
 import pyresample
 
+
 @dataclass
 class Grid:
     """
     Wrapper class combining relevant aspects of the grid used by
     SPEED.
     """
+
     grid: pyresample.geometry.AreaDefinition
     lons: np.ndarray
     lats: np.ndarray
@@ -28,6 +30,4 @@ class Grid:
         self.lats = lats[..., 0]
 
 
-GLOBAL = Grid(
-    pyresample.load_area(Path(__file__).parent / "global.yml")
-)
+GLOBAL = Grid(pyresample.load_area(Path(__file__).parent / "global.yml"))
