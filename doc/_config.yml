@@ -1,0 +1,8 @@
+title: The IPWG satellite precipitation estimation rapid evaluation dataset
+author: Machine learning benchmark working groupd of the International Precipitation Working Group
+execute:
+  execute_notebooks: force
+
+# Add a bibtex file so that we can create citations
+bibtex_bibfiles:
+  - references.bib
