@@ -107,6 +107,9 @@ class Combined(ReferenceData):
         results_mirs = []
         results_cmb = []
 
+        gmi_filenames = []
+        cmb_filenames = []
+
         for granule in granules:
             gmi_files = l1c_r_gpm_gmi.get(time_range=granule.time_range)
             index = Index.index(l1c_r_gpm_gmi, gmi_files)
@@ -114,6 +117,7 @@ class Combined(ReferenceData):
                 index.find(time_range=granule.time_range, roi=granule.geometry)
             )
             mirs_data = run_mirs(granule, gmi_granules[0])
+            gmi_filenames.append(gmi_granules[0].file_record.filename)
             results_mirs.append(mirs_data)
 
             granule.file_record.get()
@@ -123,6 +127,7 @@ class Combined(ReferenceData):
                 {"estim_surf_precip_tot_rate": "surface_precip"}
             )
             results_cmb.append(cmb_data)
+            cmb_filenames.append(granule.file_record.filename)
 
         mirs_data = xr.concat(results_mirs, "Scanline")
         cmb_data = xr.concat(results_cmb, "matched_scans")
@@ -131,6 +136,8 @@ class Combined(ReferenceData):
         cmb_data_r = resample_data(cmb_data, GLOBAL.grid, 5e3)
 
         data_r = xr.merge([mirs_data_r, cmb_data_r])
+        data_r.attrs["gmi_l1c_files"] = ",".join(str(gmi_filenames))
+        data_r.attrs["cmb_files"] = ",".join(str(cmb_filenames))
         return data_r
 
 

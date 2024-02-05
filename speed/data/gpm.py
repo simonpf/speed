@@ -14,8 +14,8 @@ from typing import List, Tuple, Optional
 
 from gprof_nn.data.l1c import L1CFile
 from gprof_nn.data import preprocessor
-
 from pansat import FileRecord, TimeRange, Granule
+from pansat.environment import get_index
 from pansat.products.satellite.gpm import (
     merged_ir,
     l1c_metopa_mhs,
@@ -24,12 +24,16 @@ from pansat.products.satellite.gpm import (
     l1c_noaa18_mhs,
     l1c_noaa19_mhs,
     l1c_gcomw1_amsr2,
+    l1c_tropics03_tms,
+    l1c_tropics06_tms,
+    l1c_r_gpm_gmi
 )
 from pansat.granule import merge_granules, Granule
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
 from pyresample.geometry import SwathDefinition
 from pyresample import kd_tree
+import toml
 
 import numpy as np
 import xarray as xr
@@ -51,7 +55,7 @@ from speed import grids
 LOGGER = logging.getLogger(__file__)
 
 
-def run_preprocessor(gpm_granule):
+def run_preprocessor(gpm_granule: Granule) -> xr.Dataset:
     """
     Run preprocessor on a GPM granule.
 
@@ -76,19 +80,83 @@ def run_preprocessor(gpm_granule):
     finally:
         os.chdir(old_dir)
 
-    preprocessor_data = preprocessor_data.rename({"brightness_temperatures": "tbs_mw"})
-    invalid = preprocessor_data.tbs_mw.data < 0
-    preprocessor_data.tbs_mw.data[invalid] = np.nan
+    preprocessor_data = preprocessor_data.rename({
+        "channels": "channels_gprof",
+        "brightness_temperatures": "tbs_mw_gprof"
+    })
+    invalid = preprocessor_data.tbs_mw_gprof.data < 0
+    preprocessor_data.tbs_mw_gprof.data[invalid] = np.nan
 
     return preprocessor_data
+
+
+def load_l1c_brightness_temperatures(
+        gpm_granule: Granule,
+        preprocessor_data: xr.Dataset,
+        radius_of_influence: float
+) -> np.ndarray:
+    """
+    Load and, if required, remap L1C brightness temperatures to preprocessor swath.
+
+    Args:
+        gpm_granule: The granule of GPM L1C data from which to extract the brightness temperatures.
+        preprocessor_data: An xarray.Dataset containing the data from the preprocessor.
+        radius_of_influence: The radius of influence to use for the nearest neighbor resampling
+             of the brightness temperatures.
+
+    Return:
+        A numpy array containing all combined brightness temperatures from the L1C file.
+    """
+    l1c_data = gpm_granule.open()
+    lats_p = preprocessor_data.latitude.data
+    lons_p = preprocessor_data.longitude.data
+
+    if "tbs" in l1c_data.variables:
+        lats = l1c_data.latitude.data
+        lons = l1c_data.longitude.data
+        if lats.shape == lats_p.shape:
+            return l1c_data.tbs
+
+        source = SwathDefinition(lons=lons, lats=lats)
+        target = SwathDefinition(lons=lons_p, lats=lats_p)
+        tbs = kd_tree.resample_nearest(
+            source,
+            l1c_data.tbs.data,
+            target,
+            radius_of_influence=radius_of_influence
+        )
+        return tbs
+
+    tbs = []
+    swath = 1
+    while f"latitude_s{swath}" in l1c_data.variables:
+        lats = l1c_data[f"latitude_s{swath}"].data
+        lons = l1c_data[f"longitude_s{swath}"].data
+
+        source = SwathDefinition(lons=lons, lats=lats)
+        target = SwathDefinition(lons=lons_p, lats=lats_p)
+        tbs.append(
+            kd_tree.resample_nearest(
+                source,
+                l1c_data[f"tbs_s{swath}"].data,
+                target,
+                radius_of_influence=radius_of_influence
+            )
+        )
+        swath += 1
+
+    tbs = np.concatenate(tbs, axis=-1)
+    invalid = tbs < 0
+    tbs[invalid] = np.nan
+    return tbs
 
 
 def interp_along_swath(ref_data, scan_time, dimension="time"):
     """
     Interpolate time-gridded data to swath.
 
-    Helper function that interpolates time-gridded data to sensor
-    scan times.
+    Helper function that interpolates data with an independent time dimension
+    to swath data, where the time varies by scan.
 
     Args:
         ref_data: An xarray.Dataset containing the data to interpolate.
@@ -117,13 +185,18 @@ def interp_along_swath(ref_data, scan_time, dimension="time"):
 
 class GPMInput(InputData):
     """
-    Represents input data from a sensor type of the GPM constellation.
+    The GPMInput class provides functionality to load data from any sensor
+    of the GPM constellation and combine this data with any of the reference
+    data classes.
     """
-
     def __init__(self, name, products, radius_of_influence=60e3):
         super().__init__(name)
         self.products = products
         self.radius_of_influence = radius_of_influence
+
+        characteristics_dir = Path(__file__).parent / "sensor_characteristics"
+        with open(characteristics_dir / (name + ".toml")) as char_file:
+            self.characteristics = toml.loads(char_file.read())
 
     def process_match(
         self,
@@ -170,6 +243,8 @@ class GPMInput(InputData):
                 * (lats > lat_min)
                 * (lats < lat_max)
             ).any(-1)
+            if not scans.any():
+                return None
             start_time = l1c_data.scan_time.data[scans].min()
             end_time = l1c_data.scan_time.data[scans].max()
             inpt_granule.time_range = TimeRange(start_time, end_time)
@@ -187,9 +262,19 @@ class GPMInput(InputData):
             return None
 
         preprocessor_data = run_preprocessor(inpt_granule)
+        tbs_mw = load_l1c_brightness_temperatures(
+            inpt_granule,
+            preprocessor_data,
+            self.radius_of_influence
+        )
+        preprocessor_data["tbs_mw"] = (("scans", "pixels", "channels"), tbs_mw.data)
+        preprocessor_data["tbs_mw"].attrs.update(self.characteristics["channels"])
+        preprocessor_data["tbs_mw_gprof"].attrs.update(self.characteristics["channels_gprof"])
 
         # Load and combine reference data for all matches granules
         ref_data = reference_data.load_reference_data(inpt_granule, ref_granules)
+        if ref_data is None:
+            return None
         if "time" in ref_data:
             reference_data_r = ref_data.interp(
                 latitude=preprocessor_data.latitude,
@@ -245,6 +330,11 @@ class GPMInput(InputData):
         )
         preprocessor_data["tbs_ir"] = (("scans", "pixels"), tbs_ir.data)
 
+        ir_input_files = [rec.filename for rec in ir_files]
+        preprocessor_data.attrs["ir_input_files"] = ir_input_files
+        gpm_input_file = inpt_granule.file_record.filename
+        preprocessor_data.attrs["gpm_input_file"] = gpm_input_file
+
         # Save data in native format.
         time = save_data_native(
             self.name,
@@ -258,8 +348,16 @@ class GPMInput(InputData):
         preprocessor_data_r = resample_data(
             preprocessor_data, grids.GLOBAL.grid, self.radius_of_influence
         )
+
         tbs_ir = ir_data.tbs_ir.interpolate_na(dim="latitude", method="nearest")
-        preprocessor_data_r["tbs_ir"] = tbs_ir
+        mean_time = preprocessor_data_r.scan_time.mean()
+        delta_t = np.abs(ir_data.tbs_ir.time - mean_time)
+        time_ind = np.argmin(delta_t.data)
+        tbs_ir = tbs_ir[{"time": time_ind}].rename({"time": "time_ir"})
+        preprocessor_data_r["tbs_ir"] = tbs_ir.interp(
+            latitude=preprocessor_data_r.latitude,
+            longitude=preprocessor_data_r.longitude
+        )
 
         indices = calculate_swath_resample_indices(
             preprocessor_data, grids.GLOBAL, self.radius_of_influence
@@ -333,10 +431,18 @@ class GPMInput(InputData):
                 lock.acquire()
             try:
                 gpm_recs = product.get(time_range)
+                gpm_index = Index.index(product, gpm_recs)
+            except (RuntimeError, KeyError):
+                gpm_index = get_index(product)
+                LOGGER.info(
+                    "Could not determine available files from provider. Using "
+                    "local registry."
+                )
+
             finally:
                 if lock is not None:
                     lock.release()
-            gpm_index = Index.index(product, gpm_recs)
+
             # If reference data has a fixed domain, subset index to files
             # intersecting the domain.
             if reference_data.domain is not None:
@@ -386,10 +492,9 @@ MHS_PRODUCTS = [
     l1c_noaa18_mhs,
     l1c_noaa19_mhs,
 ]
-
 mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3)
 
+gmi = GPMInput("gmi", [l1c_r_gpm_gmi], radius_of_influence=15e3)
 
 AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
-
 amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=64e3)

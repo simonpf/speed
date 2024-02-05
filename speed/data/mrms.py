@@ -5,7 +5,9 @@ spree.data.mrms
 This module provides function to extract collocations with the NOAA
 Multi-Radar Multi-Sensor (MRMS) ground-based radar estimates.
 """
+import logging
 from typing import List, Optional, Union, Tuple
+import warnings
 
 import dask.array as da
 import numpy as np
@@ -19,6 +21,9 @@ import xarray as xr
 from speed.data.reference import ReferenceData
 from speed.grids import GLOBAL
 from speed.data.utils import get_smoothing_kernel, extract_rect
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 PRECIP_CLASSES = {
@@ -76,7 +81,9 @@ def smooth_field(data: np.ndarray) -> np.ndarray:
     # them here.
     data_s = np.maximum(convolve(data_r, k, mode="same"), 0.0)
     cts = np.maximum(convolve(~invalid, np.ones_like(k), mode="same"), 0.0)
-    data_s = data_s / (cts / k.size)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        data_s = data_s / (cts / k.size)
     data_s[invalid] = np.nan
     return data_s
 
@@ -161,6 +168,8 @@ class MRMS(ReferenceData):
         row_start = None
         row_end = None
 
+        input_files = []
+
         for granule in granules:
             precip_rate_rec = granule.file_record
             precip_rate_rec = precip_rate_rec.get()
@@ -197,6 +206,7 @@ class MRMS(ReferenceData):
                     precip_data_r, col_start, col_end, row_start, row_end
                 )
             }
+            input_files.append(precip_rate_rec.filename)
 
             # Find and resample corresponding radar quality index data.
             rqi_recs = mrms.radar_quality_index.get(precip_rate_rec.temporal_coverage)
@@ -212,6 +222,7 @@ class MRMS(ReferenceData):
                 data_arrays["radar_quality_index"] = extract_rect(
                     rqi_data_r, col_start, col_end, row_start, row_end
                 )
+                input_files.append(rqi_rec.filename)
 
             # Find and resample precip flag data.
             precip_flag_recs = mrms.precip_flag.get(precip_rate_rec.temporal_coverage)
@@ -229,6 +240,51 @@ class MRMS(ReferenceData):
                 data_arrays["precip_flag"] = extract_rect(
                     precip_flag_data_r, col_start, col_end, row_start, row_end
                 )
+                input_files.append(precip_flag_rec.filename)
+
+            # Find and resample gauge correction factors.
+            precip_1h_gc_recs = mrms.precip_1h_gc.get(precip_rate_rec.temporal_coverage)
+            if len(precip_1h_gc_recs) == 0:
+                precip_1h_gc_recs = mrms.precip_1h_ms.get(precip_rate_rec.temporal_coverage)
+            precip_1h_gc_rec = precip_rate_rec.find_closest_in_time(precip_1h_gc_recs)[0]
+            if precip_rate_rec.time_difference(precip_1h_gc_rec).total_seconds() > 0:
+                LOGGER.warning(
+                    "Couldn't find matching gauge-corrected MRMS measurements for "
+                    "MRMS precip rate file '%s'.",
+                    precip_rate_rec.filename
+                )
+                return None
+
+            precip_1h_ro_recs = mrms.precip_1h.get(precip_1h_gc_rec.temporal_coverage)
+            parts = precip_1h_gc_rec.filename.split("_")
+            parts[0] = "RadarOnly"
+            ro_filename = "_".join(parts)
+            precip_1h_ro_rec = [
+                rec for rec in precip_1h_ro_recs if rec.filename == ro_filename
+            ]
+            if len(precip_1h_ro_rec) == 0:
+                LOGGER.warning(
+                    "Couldn't find matching radar-only MRMS measurements for "
+                    "MRMS precip rate file '%s'.",
+                    precip_rate_rec.filename
+                )
+                return None
+            precip_1h_ro_rec = precip_1h_ro_rec[0].get()
+            precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec)
+            precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec)
+            corr_factor_data = precip_1h_gc_data.precip_1h_gc / precip_1h_ro_data.precip_1h
+            mask = corr_factor_data.data == np.inf
+            corr_factor_data.data[mask] = 1.0
+            corr_factor_data = corr_factor_data[
+                {"longitude": lon_indices, "latitude": lat_indices}
+            ]
+            corr_factor_r = resample_scalar(corr_factor_data)
+            data_arrays["gauge_correction"] = extract_rect(
+                corr_factor_r, col_start, col_end, row_start, row_end
+            )
+
+            input_files.append(precip_1h_ro_rec.filename)
+            input_files.append(precip_1h_gc_rec.filename)
 
             data = xr.Dataset(data_arrays)
             data["time"] = precip_data.time
@@ -236,6 +292,7 @@ class MRMS(ReferenceData):
             ref_data.append(data)
 
         ref_data = xr.concat(ref_data, "time").sortby("time")
+        ref_data.attrs["mrms_input_files"] = input_files
         return ref_data
 
 

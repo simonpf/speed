@@ -88,3 +88,4 @@ def test_load_mrms_data(mrms_match):
     assert "surface_precip" in reference_data
     assert "precip_flag" in reference_data
     assert "radar_quality_index" in reference_data
+    assert "gauge_correction" in reference_data

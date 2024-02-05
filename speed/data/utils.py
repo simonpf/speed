@@ -5,6 +5,7 @@ speed.data.utils
 Utility functions for data processing.
 """
 from pathlib import Path
+from typing import Optional
 
 from gprof_nn.data.l1c import L1CFile
 from pansat.time import to_datetime
@@ -131,7 +132,7 @@ def save_data_native(
     scan_end = valid_scans[-1]
     n_scans = scan_end - scan_start
     if n_scans < min_scans:
-        scan_c = int(0.5 * (scan_end - scan_start))
+        scan_c = int(0.5 * (scan_end + scan_start))
         scan_start = max(scan_c - min_scans // 2, 0)
         scan_end = min(scan_start + min_scans, surface_precip.shape[0])
 
@@ -189,19 +190,27 @@ def save_data_gridded(
     gridded_path = output_path / "gridded"
     gridded_path.mkdir(exist_ok=True)
 
-    surface_precip = reference_data.surface_precip.data
-    tbs = preprocessor_data.tbs_mw.data
-    valid = np.isfinite(surface_precip) * np.isfinite(tbs).any(-1)
-    row_inds, col_inds = np.where(valid)
+    if reference_data.longitude[0] < -179 and reference_data.longitude[-1] > 179:
 
-    # If collocation crosses the date line, we simply shift it to the left
-    # so that all valid data is right of the meridian line.j
-    if np.any(valid[:, 0]) and np.any(valid[:, -1]):
-        n_cols = valid.shape[1]
-        # Find last column with valid indices.
-        n_roll = np.where(valid[:, : n_cols // 2].any(0))[0][-1]
-        preprocessor_data = preprocessor_data.roll(longitude=-n_roll)
-        reference_data = reference_data.roll(longitude=-n_roll)
+        surface_precip = reference_data.surface_precip.data
+        tbs = preprocessor_data.tbs_mw.data
+        valid = np.isfinite(surface_precip) * np.isfinite(tbs).any(-1)
+        row_inds, col_inds = np.where(valid)
+
+        # If collocation crosses the date line, we simply shift it to the left
+        # so that all valid data is right of the meridian line.j
+        if np.any(valid[:, 0]) and np.any(valid[:, -1]):
+            n_cols = valid.shape[1]
+            # Find last column with valid indices.
+            n_roll = np.where(valid[:, : n_cols // 2].any(0))[0][-1] + 1
+            preprocessor_data = preprocessor_data.roll(
+                longitude=-n_roll,
+                roll_coords=True
+            )
+            reference_data = reference_data.roll(
+                longitude=-n_roll,
+                roll_coords=True
+            )
 
     surface_precip = reference_data.surface_precip.data
     tbs = preprocessor_data.tbs_mw.data
@@ -241,7 +250,12 @@ def save_data_gridded(
     reference_data.to_netcdf(output_file, group="reference_data", mode="a")
 
 
-def resample_data(dataset, target_grid, radius_of_influence=5e3):
+def resample_data(
+        dataset,
+        target_grid,
+        radius_of_influence=5e3,
+        new_dims=("latitude", "longitude")
+) -> xr.Dataset:
     """
     Resample xarray.Dataset data to global grid.
 
@@ -256,7 +270,12 @@ def resample_data(dataset, target_grid, radius_of_influence=5e3):
     """
     lons = dataset.longitude.data
     lats = dataset.latitude.data
-    lons_t, lats_t = target_grid.get_lonlats()
+    if isinstance(target_grid, tuple):
+        lons_t, lats_t = target_grid
+        shape = lons_t.shape
+    else:
+        lons_t, lats_t = target_grid.get_lonlats()
+        shape = target_grid.shape
 
     valid_pixels = (
         (lons_t >= lons.min())
@@ -273,14 +292,15 @@ def resample_data(dataset, target_grid, radius_of_influence=5e3):
     )
     ind_in, ind_out, inds, _ = info
 
-    dims = ("latitude", "longitude")
     resampled = {}
     resampled["latitude"] = (("latitude",), lats_t[:, 0])
     resampled["longitude"] = (("longitude",), lons_t[0, :])
 
     for var in dataset:
+        if var in ["latitude", "longitude"]:
+            continue
         data = dataset[var].data
-        if data.ndim == 1:
+        if data.ndim == 1 and lons.ndim > 1:
             data = np.broadcast_to(data[:, None], lons.shape)
 
         dtype = data.dtype
@@ -297,7 +317,7 @@ def resample_data(dataset, target_grid, radius_of_influence=5e3):
             "nn", target.shape, data, ind_in, ind_out, inds, fill_value=fill_value
         )
 
-        data_full = np.zeros(target_grid.shape + data.shape[2:], dtype=dtype)
+        data_full = np.zeros(shape + data.shape[lons.ndim:], dtype=dtype)
         if np.issubdtype(dtype, np.floating):
             data_full = np.nan * data_full
         elif np.issubdtype(dtype, np.datetime64):
@@ -308,7 +328,7 @@ def resample_data(dataset, target_grid, radius_of_influence=5e3):
             data_full[:] = -9999
 
         data_full[valid_pixels] = data_r
-        resampled[var] = (dims + dataset[var].dims[2:], data_full)
+        resampled[var] = (new_dims + dataset[var].dims[lons.ndim:], data_full)
 
     return xr.Dataset(resampled)
 
@@ -415,3 +435,83 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
             "pixel_index": (dims, pixel_inds_gridded),
         }
     )
+
+
+
+def extract_scenes(
+        input_data: xr.Dataset,
+        reference_data: xr.Dataset,
+        output_folder: Path,
+        size: int = 256,
+        overlap: float = 0.0,
+        filename_pattern = "collocation_{time}",
+        min_input_frac: Optional[float] = None
+):
+    """
+    Extract scenes of a given size from collocations.
+
+    Args:
+        input_data: An xarray.Dataset containing the retrievl input data.
+        reference_data: An xarray.Dataset containing the correpsonding reference data.
+        output_folder: The folder to which to write the extracted scenes.
+        size: The size of the scenes.
+        overlap: The maximum overlap in any direction between two scenes.
+    """
+
+    spatial_dims = input_data.tbs_mw.dims[:2]
+
+    valid_input = np.any(np.isfinite(input_data.tbs_mw.data), -1)
+    valid_output = np.isfinite(reference_data.surface_precip.data)
+    valid = valid_input * valid_output
+
+    n_rows = input_data[spatial_dims[0]].size
+    n_cols = input_data[spatial_dims[1]].size
+
+    row_inds, col_inds = np.where(valid)
+    within = (
+        (row_inds >= size // 2) * (row_inds < n_rows - size // 2) *
+        (col_inds >= size // 2) * (col_inds < n_cols - size // 2)
+    )
+    row_inds = row_inds[within]
+    col_inds = col_inds[within]
+
+    while len(row_inds) > 0:
+
+        ind = np.random.randint(len(row_inds))
+        c_row = row_inds[ind]
+        c_col = col_inds[ind]
+
+        row_start = c_row - size // 2
+        row_end = c_row + size // 2
+        col_start = c_col - size // 2
+        col_end = c_col + size // 2
+
+        slices = [slice(row_start, row_end), slice(col_start, col_end)]
+
+        inpt = input_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
+        ref = reference_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
+
+        scan_times = inpt.scan_time.data
+        scan_times = scan_times[np.isfinite(scan_times)]
+        time = scan_times[0] + np.median(scan_times - scan_times[0])
+        time = to_datetime(time)
+        if filename_pattern.endswith(".nc"):
+            filename_pattern = filename_pattern[:-3]
+        filename = filename_pattern.format(time=time.strftime("%Y%m%d%H%M%S")) + ".nc"
+
+        ref = ref.drop_vars(["latitude", "longitude"])
+        dataset = xr.merge([inpt, ref])
+        dataset.to_netcdf(output_folder / filename)
+
+        margin = max((1.0 - 0.0) * size, 1)
+        covered = (
+            (row_inds >= c_row - margin) * (row_inds <= c_row + margin) *
+            (col_inds >= c_col - margin) * (col_inds <= c_col + margin)
+        )
+
+        n_inds = len(row_inds)
+
+        row_inds = row_inds[~covered]
+        col_inds = col_inds[~covered]
+
+        assert n_inds > len(row_inds)

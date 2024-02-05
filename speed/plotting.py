@@ -131,7 +131,7 @@ def plot_collocations_native(
     add_ticks(ax, x_ticks, y_ticks, left=draw_y_ticks, bottom=draw_x_ticks)
 
     if add_titles:
-        ax.set_title(f"{satellite} {sensor} ({freqs[0]} GHz)")
+        ax.set_title(f"{satellite} {sensor} ({freqs[0]:3.2f} GHz)")
 
     ax = axs[2]
     m_tbs = ax.pcolormesh(lons, lats, tbs_ir[...], norm=tb_norm, cmap=tb_cmap)
@@ -141,7 +141,7 @@ def plot_collocations_native(
     add_ticks(ax, x_ticks, y_ticks, left=False, bottom=draw_x_ticks)
 
     if add_titles:
-        ax.set_title(f"IR")
+        ax.set_title(f"Geo IR")
 
     ax = axs[3]
     m_sp = ax.pcolormesh(lons, lats, surface_precip, norm=precip_norm, cmap=precip_cmap)
@@ -151,7 +151,7 @@ def plot_collocations_native(
     add_ticks(ax, x_ticks, y_ticks, left=False, bottom=draw_x_ticks)
 
     if add_titles:
-        ax.set_title(f"Surface precip")
+        ax.set_title(f"Surface precipitation")
     #
     # Add colorbars
     #
@@ -265,7 +265,7 @@ def plot_collocations_gridded(
 
     ax = axs[2]
     m_tbs = ax.imshow(
-        tbs_ir[...], norm=tb_norm, cmap=tb_cmap, extent=ext, origin="upper"
+        tbs_ir, norm=tb_norm, cmap=tb_cmap, extent=ext, origin="upper"
     )
     ax.coastlines(color="grey")
     add_ticks(ax, x_ticks, y_ticks, left=False, bottom=draw_x_ticks)
