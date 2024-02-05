@@ -17,7 +17,7 @@ SPEED consists of collocations of satellite *observations* from passive
 microwave and IR sensors and corresponding *reference data* in the form of
 precipitation estimates from ground-based and space-borne precipitation radars.
 Collocations are provided both on the native grid of the *observations* and
-regridded to a global, regulare latitude-longitude with a resolution of
+regridded to a global, regular latitude-longitude with a resolution of
 0.036$^\circ$.
 
 ### Use cases
@@ -27,23 +27,23 @@ SPEED supports two principal use cases, which we refer to as *validation* and
 
 #### Validation
 
-The aim of retrieval validation is to quantify the retrieval uncertainty in
-precipitation estimates of a retrieval system in its entirety. For validation,
-the retrieval system ise evaluated in an end-to-end manner and the resulting
-uncertainties thus include the effects of all components of the retrieval system
-including the retrieval algorithm, implicit or explicit a priori assumptions,
-and the processing system.
+The aim of retrieval validation is to quantify the absolute retrieval
+uncertainty in precipitation estimates of a retrieval system in its entirety.
+For validation, the retrieval system is evaluated in an end-to-end manner and
+the resulting uncertainties thus include the effects of all components of the
+retrieval system including the retrieval algorithm, implicit or explicit a
+priori assumptions, and the processing system.
 
 Although validation generally aims to quantify uncertainties in absolute terms,
 in practice, this is typically not possible due to uncertainties in the
-reference. However, in particular for data-driven retrievals it is important to
+reference. However, in particular for data-driven retrievals, it is important to
 evaluate the estimates using independent observations and reference data to
 ensure the resulting validation result includes the generalization error.
 
 #### Benchmarking
 
 The aim of benchmarking is the comparison of retrieval algorithms. Since the
-retrieval algorithm constitutes a principal component of retrieval systems,
+retrieval algorithm constitutes a principal component of a retrieval system,
 retrieval development typically devotes a significant effort to optimizing this
 component. In particular with respect to the recent consolidation of
 deep-learning-based precipitation retrievals and the diversity of available
