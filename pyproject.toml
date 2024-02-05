@@ -15,7 +15,8 @@ license = {text = "MIT"}
 dependencies = [
     "pytest",
     "click",
-    "cmocean"
+    "cmocean",
+    "toml"
 ]
 dynamic = ["version"]
 
