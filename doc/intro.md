@@ -1,5 +1,7 @@
 # The IPWG Satellite Precipitation Estimation Evaluation Dataset (SPEED)
 
+## Introduction
+
 The Satellite Precipitation Estimation Evaluation Dataset (SPEED) has been
 developed by the International Precipitation Working Group (IPWG) to serve as a
 benchmark and validation dataset for precipitation retrievals. The dataset
@@ -8,10 +10,9 @@ reference precipitation measurements from ground-based and space-borne active
 sensors.
 
 The dataset aims to serve two principal applications:
-    1. The rapid benchmarking of precipitation retrieval algorithms
-    2. The validation of operational precipitation retrieval algorithms
 
-## Overview
+ 1. The rapid benchmarking of precipitation retrieval algorithms
+ 2. The validation of operational precipitation retrieval algorithms
 
 SPEED consists of collocations of satellite *observations* from passive
 microwave and IR sensors and corresponding *reference data* in the form of
