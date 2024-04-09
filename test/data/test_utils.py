@@ -9,7 +9,8 @@ from speed.data.utils import (
     extract_rect,
     extract_scans,
     get_smoothing_kernel,
-    resample_data
+    resample_data,
+    calculate_footprint_weights
 )
 from gprof_nn.data.l1c import L1CFile
 
@@ -166,3 +167,24 @@ def test_calculate_swath_resample_indices(gmi_granule):
    lats_r = lats_r.reshape(lats_g.shape)
    valid = indices.scan_index.data >= 0
    assert np.max(np.abs(lats_r[valid] - lats_g[valid])) < 0.036
+
+
+def test_calculate_footprint_weights():
+    """
+    Test calculation of footprint weights for GMI and ensure that:
+
+    - For a 1 degree beam width power 9km from center is reduced roughly to 0.5
+    """
+    spacecraft_position = (-22.633354, 28.659, 404286.7431640625)
+    center = (-20.182945, 32.425606)
+    lons = np.array([-20.182943, -20.139821750014576])
+    lats = np.array([32.425606, 32.49671201563593])
+    beam_width = 1.0
+    weights = calculate_footprint_weights(
+        lons,
+        lats,
+        center,
+        spacecraft_position,
+        beam_width
+    )
+    assert np.isclose(weights[1] / weights[0], 0.5, rtol=0.05)

@@ -5,7 +5,7 @@ speed.data.utils
 Utility functions for data processing.
 """
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from gprof_nn.data.l1c import L1CFile
 from pansat.time import to_datetime
@@ -443,7 +443,6 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
     )
 
 
-
 def extract_scenes(
         input_data: xr.Dataset,
         reference_data: xr.Dataset,
@@ -521,3 +520,83 @@ def extract_scenes(
         col_inds = col_inds[~covered]
 
         assert n_inds > len(row_inds)
+
+
+def lla_to_ecef(
+        lon: np.ndarray,
+        lat: np.ndarray,
+        alt: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Convert longitude, latitude and altidue to earth-centered earth-fixed (ECEF)
+    coordinates.
+
+    Args:
+        lon: A numpy.ndarray containing longitude coordinates.
+        lat: A numpy.ndarray containing latitude coordinates.
+        alt: A numpy.ndarray containing altitude coordinates.
+
+    Return:
+        A tuple ``(x, y, z)`` containing the ECEF x-, y-, and z-coordinates, respectively
+    """
+    # WGS84 ellipsoid constants
+    a = 6378137.0  # Semi-major axis
+    f = 1 / 298.257223563  # Flattening
+    b = a * (1 - f)  # Semi-minor axis
+    e_sq = 1 - (b**2 / a**2)  # Square of eccentricity
+
+    # Convert latitude and longitude from degrees to radians
+    lat_rad = np.radians(lat)
+    lon_rad = np.radians(lon)
+
+    # Calculate N, the radius of curvature in the prime vertical
+    N = a / np.sqrt(1 - e_sq * np.sin(lat_rad)**2)
+
+    # Calculate ECEF coordinates
+    x = (N + alt) * np.cos(lat_rad) * np.cos(lon_rad)
+    y = (N + alt) * np.cos(lat_rad) * np.sin(lon_rad)
+    z = ((b**2 / a**2) * N + alt) * np.sin(lat_rad)
+
+    return x, y, z
+
+
+def calculate_footprint_weights(
+        lons: np.ndarray,
+        lats: np.ndarray,
+        center: Tuple[float, float],
+        spacecraft_position: Tuple[float, float, float],
+        beam_width: float
+) -> np.ndarray:
+    """
+    Calculate footprint weights for pixels on surface.
+
+    Args:
+        lons: A numpy.ndarray containing the longitude coordinates of the points on the surface.
+        lats: A numpy.ndarray containing the latitude coordinates of the points on the surface.
+        lon_sc: Longitude coordinate of the spacecraft.
+        lat_sc: Latitude coordinate of the spacecraft.
+        alt_sc: The altitude of the spacecraft.
+        beam_width: The sensor beam width.
+
+    Return:
+        A weigth array of the same shape as 'lons' and 'lats' containing the antenna sensitivity
+        assuming a Gaussian antenna pattern with the given beam width.
+    """
+    lon_sc, lat_sc, alt_sc = spacecraft_position
+    x_sc, y_sc, z_sc = lla_to_ecef(lon_sc, lat_sc, alt_sc)
+    vec_sc = np.stack((x_sc, y_sc, z_sc), -1)
+
+    lon_c, lat_c = center
+    x_c, y_c, z_c = lla_to_ecef(lon_c, lat_c, 0.0)
+    vec_c = np.stack((x_c, y_c, z_c), -1) - vec_sc
+
+    x, y, z = lla_to_ecef(lons, lats, 0)
+    vec = np.stack((x, y, z), -1) - vec_sc
+
+    vec_c = np.broadcast_to(vec_c, vec.shape)
+    angs = np.rad2deg(
+        np.arccos((vec * vec_c).sum(-1) / np.sqrt(np.sum(vec ** 2, -1) * np.sum(vec_c ** 2, -1)))
+    )
+    vec_c = np.stack((x_c, y_c, z_c), -1)[None, None] - vec_sc
+    ap = np.exp(np.log(0.5) * (2.0 * angs / 0.98) ** 2)
+    return ap
