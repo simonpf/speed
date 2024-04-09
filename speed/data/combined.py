@@ -85,8 +85,9 @@ class Combined(ReferenceData):
     Extracts surface precipitation from GPM CMB and MIRS.
     """
 
-    def __init__(self, name):
+    def __init__(self, name, include_mirs: bool):
         super().__init__(name, None, l2b_gpm_cmb)
+        self.include_mirs = include_mirs
 
     def load_reference_data(
         self, input_granule: Granule, granules: List[Granule]
@@ -116,9 +117,11 @@ class Combined(ReferenceData):
             gmi_granules = merge_granules(
                 index.find(time_range=granule.time_range, roi=granule.geometry)
             )
-            mirs_data = run_mirs(granule, gmi_granules[0])
-            gmi_filenames.append(gmi_granules[0].file_record.filename)
-            results_mirs.append(mirs_data)
+
+            if self.include_mirs:
+                mirs_data = run_mirs(granule, gmi_granules[0])
+                gmi_filenames.append(gmi_granules[0].file_record.filename)
+                results_mirs.append(mirs_data)
 
             granule.file_record.get()
 
@@ -129,16 +132,18 @@ class Combined(ReferenceData):
             results_cmb.append(cmb_data)
             cmb_filenames.append(granule.file_record.filename)
 
-        mirs_data = xr.concat(results_mirs, "Scanline")
         cmb_data = xr.concat(results_cmb, "matched_scans")
-
-        mirs_data_r = resample_data(mirs_data, GLOBAL.grid, 15e3)
-        cmb_data_r = resample_data(cmb_data, GLOBAL.grid, 5e3)
-
-        data_r = xr.merge([mirs_data_r, cmb_data_r])
-        data_r.attrs["gmi_l1c_files"] = ",".join(str(gmi_filenames))
+        data_r = resample_data(cmb_data, GLOBAL.grid, 5e3)
         data_r.attrs["cmb_files"] = ",".join(str(cmb_filenames))
+
+        if self.include_mirs:
+            mirs_data = xr.concat(results_mirs, "Scanline")
+            mirs_data_r = resample_data(mirs_data, GLOBAL.grid, 15e3)
+            data_r = xr.merge([mirs_data_r, data_r])
+            data_r.attrs["gmi_l1c_files"] = ",".join(str(gmi_filenames))
+
         return data_r
 
 
-gpm_cmb = Combined("cmb")
+gpm_cmb = Combined("cmb", include_mirs=False)
+gpm_cmb_w_mirs = Combined("cmb_w_mirs", include_mirs=False)

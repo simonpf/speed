@@ -79,18 +79,24 @@ def extract_rect(
     return dataset_new
 
 
-def extract_scans(granule: Granule, dest: Path) -> Path:
+def extract_scans(granule: Granule, dest: Path, min_scans: Optional[int] = None) -> Path:
     """
     Extract and write scans from L1C file into a separate file.
 
     Args:
         granule: A pansat granule specifying a subset of an orbit.
         dest: A directory to which the extracted scans will be written.
+        min_scans: A minimum number of scans to extract.
 
     Return:
         The path of the file containing the extracted scans.
     """
     scan_start, scan_end = granule.primary_index_range
+    n_scans = scan_end - scan_start
+    if min_scans is not None and n_scans < min_scans:
+        scan_c = (scan_end + scan_start) // 2
+        scan_start = scan_c - min_scans // 2
+        scan_end = scan_start + min_scans
     l1c_path = granule.file_record.local_path
     l1c_file = L1CFile(granule.file_record.local_path)
     output_filename = dest / l1c_path.name

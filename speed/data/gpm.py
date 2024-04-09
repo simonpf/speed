@@ -1,5 +1,5 @@
 """
-spree.data.gpm
+spre.data.gpm
 ==============
 
 This module contains the code to process GPM L1C data into SPREE collocations.
@@ -71,7 +71,7 @@ def run_preprocessor(gpm_granule: Granule) -> xr.Dataset:
     try:
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            l1c_file = extract_scans(gpm_granule, tmp)
+            l1c_file = extract_scans(gpm_granule, tmp, min_scans=128)
             os.chdir(tmp)
             sensor = L1CFile(l1c_file).sensor
             preprocessor_data = preprocessor.run_preprocessor(
@@ -274,6 +274,10 @@ class GPMInput(InputData):
         # Load and combine reference data for all matches granules
         ref_data = reference_data.load_reference_data(inpt_granule, ref_granules)
         if ref_data is None:
+            LOGGER.info(
+                "No reference data for %s.",
+                ref_granules
+            )
             return None
         if "time" in ref_data:
             reference_data_r = ref_data.interp(
@@ -336,12 +340,17 @@ class GPMInput(InputData):
         preprocessor_data.attrs["gpm_input_file"] = gpm_input_file
 
         # Save data in native format.
+        LOGGER.info(
+            "Saving file in native format to %s.",
+            output_folder
+        )
         time = save_data_native(
             self.name,
             reference_data.name,
             preprocessor_data,
             reference_data_r,
             output_folder,
+            min_scans=128
         )
 
         # Save data in gridded format.
@@ -388,6 +397,10 @@ class GPMInput(InputData):
             scan_time = scan_time.fillna(value=scan_time.min())
             ref_data = interp_along_swath(ref_data, scan_time, dimension="time")
 
+        LOGGER.info(
+            "Saving file in gridded format to %s.",
+            output_folder
+        )
         save_data_gridded(
             self.name,
             reference_data.name,
@@ -432,6 +445,10 @@ class GPMInput(InputData):
             try:
                 gpm_recs = product.get(time_range)
                 gpm_index = Index.index(product, gpm_recs)
+                LOGGER.info(
+                    f"Found %s files for %s/%s/%s.",
+                    len(gpm_recs), year, month, day
+                )
             except (RuntimeError, KeyError):
                 gpm_index = get_index(product)
                 LOGGER.info(
