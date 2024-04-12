@@ -1,0 +1,9 @@
+[channels]
+frequencies = [89.0, 157.0, 183.31, 183.31, 190.31]
+offsets = [0.0, 0.0, 1.0, 3.0, 0.0]
+polarization = ["V", "V", "H", "H", "V"]
+
+[channels_gprof]
+frequencies = [89.0, 157.0, 183.31, 183.31, 190.31]
+offsets = [0.0, 0.0, 1.0, 3.0, 0.0]
+polarization = ["V", "V", "H", "H", "V"]

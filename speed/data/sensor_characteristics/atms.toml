@@ -1,0 +1,9 @@
+[channels]
+frequencies = [23.8, 31.4, 88.2, 165.5, 183.31, 183.31, 183.31, 183.31, 183.31]
+offset = [0.0, 0.0, 0.0, 0.0, 7.0, 4.5, 3.0, 1.8, 1.0]
+polarization = ["QV", "QV", "QV", "QH", "QH", "QH", "QH", "QH", "QH"]
+
+[channels_gprof]
+frequencies = [88.2, 165.5, 183.31, 186.31, 190.31]
+offset = [0.0, 0.0, 1.0, 3.0, 7.0]
+polarization = ["QH", "QH", "QH", "QH", "QH"]
