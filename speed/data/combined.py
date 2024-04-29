@@ -10,12 +10,15 @@ from pathlib import Path
 from typing import List, Optional
 from tempfile import TemporaryDirectory
 
-from gprof_nn.data import mirs
 from gprof_nn.data.l1c import L1CFile
 import numpy as np
 from pansat import Granule
 from pansat.catalog import Index
-from pansat.products.satellite.gpm import l2b_gpm_cmb, l1c_r_gpm_gmi
+from pansat.products.satellite.gpm import (
+    l2b_gpm_cmb,
+    l1c_r_gpm_gmi,
+    l2a_gpm_dpr_slh
+)
 from pansat.granule import merge_granules
 
 import xarray as xr
@@ -38,6 +41,7 @@ def run_mirs(cmb_granule, gmi_granule):
     Return:
         An xarray.Dataset containing the results from the mirs retrieval.
     """
+    from gprof_nn.data import mirs
 
     old_dir = os.getcwd()
     try:
@@ -125,10 +129,65 @@ class Combined(ReferenceData):
 
             granule.file_record.get()
 
-            cmb_vars = ["latitude", "longitude", "estim_surf_precip_tot_rate"]
+            cmb_vars = [
+                "latitude",
+                "longitude",
+                "estim_surf_precip_tot_rate",
+                "precipitation_type",
+                "precip_tot_water_cont",
+                "precip_liq_water_cont",
+                "cloud_ice_water_cont",
+                "cloud_liq_water_cont",
+            ]
             cmb_data = granule.open()[cmb_vars].rename(
-                {"estim_surf_precip_tot_rate": "surface_precip"}
+                {
+                    "estim_surf_precip_tot_rate": "surface_precip",
+                    "precip_tot_water_cont": "total_water_content",
+                    "precip_liq_water_cont": "rain_water_content",
+                    "cloud_ice_water_cont": "ice_water_content",
+                    "cloud_liq_water_cont": "liquid_water_content"
+                }
             )
+
+            profiles = [
+                "total_water_content",
+                "rain_water_content",
+                "ice_water_content",
+                "liquid_water_content"
+            ]
+            for var in profiles:
+                var_data = cmb_data[var]
+                var_data = var_data.where(var_data > -9000)
+                if "vertical_bins" in var_data.dims:
+                    var_data = var_data.ffill("vertical_bins")
+                var_data.data[:] = var_data.data[..., ::-1]
+                cmb_data[var] = var_data
+            cmb_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(88))
+
+            swc = cmb_data.total_water_content - cmb_data.rain_water_content
+            cmb_data["snow_water_path"] = swc.integrate("vertical_bins")
+            cmb_data["rain_water_path"] = cmb_data["rain_water_content"].integrate("vertical_bins")
+            cmb_data["ice_water_path"] = cmb_data["ice_water_content"].integrate("vertical_bins")
+            cmb_data["liquid_water_path"] = cmb_data["liquid_water_content"].integrate("vertical_bins")
+
+            target_levels = np.concatenate([0.25 * np.arange(20) + 0.25, 10.5 + np.arange(8)])
+            cmb_data = cmb_data.interp(vertical_bins=target_levels)
+
+            slh_recs = l2a_gpm_dpr_slh.get(granule.time_range)
+            if len(slh_recs) > 0:
+                scan_start, scan_end = granule.primary_index_range
+                slh_data = l2a_gpm_dpr_slh.open(slh_recs[0])[{"scans": slice(scan_start, scan_end)}]
+                slh_data = slh_data[["latent_heating"]].rename({
+                    "scans": "matched_scans",
+                    "pixels": "matched_pixels"
+                })
+                slh_data["latent_heating"].data[:] = slh_data.latent_heating.data[..., ::-1]
+                slh_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(80))
+                slh = slh_data.latent_heating.interp(vertical_bins=target_levels)
+            else:
+                slh = xr.DataArray(np.zeros_like(swc.data), dims=("scans", "pixels", "vertical_bins"))
+
+            cmb_data["latent_heating"] = slh
             results_cmb.append(cmb_data)
             cmb_filenames.append(granule.file_record.filename)
 
