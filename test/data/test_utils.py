@@ -10,7 +10,8 @@ from speed.data.utils import (
     extract_scans,
     get_smoothing_kernel,
     resample_data,
-    calculate_footprint_weights
+    calculate_footprint_weights,
+    calculate_footprint_averages
 )
 from gprof_nn.data.l1c import L1CFile
 
@@ -179,7 +180,7 @@ def test_calculate_footprint_weights():
     center = (-20.182945, 32.425606)
     lons = np.array([-20.182943, -20.139821750014576])
     lats = np.array([32.425606, 32.49671201563593])
-    beam_width = 1.0
+    beam_width = 0.98
     weights = calculate_footprint_weights(
         lons,
         lats,
@@ -188,3 +189,67 @@ def test_calculate_footprint_weights():
         beam_width
     )
     assert np.isclose(weights[1] / weights[0], 0.5, rtol=0.05)
+
+def test_calculate_footprint_averages():
+    """
+    Test calculation of footprint for a discrete 2D dirac delta function and ensure that
+    the antenna pattern is recovered in the output.
+    """
+
+    # Data to resample
+    lons = np.linspace(-5, 5, 201)
+    lats = np.linspace(-5, 5, 201)
+    data = np.zeros((201, 201, 2))
+    data[100, 100, :] = 1.0
+    data = xr.DataArray(
+        data,
+        dims=("latitude", "longitude", "channels"),
+        coords={
+        "latitude": (("latitude",), lats),
+            "longitude": (("longitude",), lons),
+        }
+    )
+
+    n_scans = 21
+    n_pixels = 21
+    lons = np.linspace(-0.05, 0.05, n_pixels)
+    lats = np.linspace(-0.05, 0.05, n_scans)
+    lons, lats = np.meshgrid(lons, lats)
+
+    longitudes = xr.DataArray(
+        lons,
+        dims=("scans", "pixels")
+    )
+    latitudes = xr.DataArray(
+        lats,
+        dims=("scans", "pixels")
+    )
+    sensor_longitudes = xr.DataArray(
+        lons[:, n_scans // 2],
+        dims=("scans",)
+    )
+    sensor_latitudes = xr.DataArray(
+        lats[:, n_scans // 2],
+        dims=("scans",)
+    )
+    sensor_altitudes = xr.DataArray(
+        160e3 * np.ones(n_scans),
+        dims=("scans",)
+    )
+
+    results, valid_frac = calculate_footprint_averages(
+        data,
+        longitudes,
+        latitudes,
+        sensor_longitudes,
+        sensor_latitudes,
+        sensor_altitudes,
+        2.0,
+        area_of_influence=2.0
+    )
+
+    assert np.isclose(results[10, 5], 0.5, atol=0.01).all()
+    assert np.isclose(results[10, 10], 1.0, atol=0.01).all()
+    assert np.isclose(results[10, 15], 0.5, atol=0.01).all()
+    assert np.isclose(results[5, 10], 0.5, atol=0.01).all()
+    assert np.isclose(results[15, 10], 0.5, atol=0.01).all()

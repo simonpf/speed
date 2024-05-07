@@ -575,7 +575,7 @@ def calculate_footprint_weights(
         lats: A numpy.ndarray containing the latitude coordinates of the points on the surface.
         lon_sc: Longitude coordinate of the spacecraft.
         lat_sc: Latitude coordinate of the spacecraft.
-        alt_sc: The altitude of the spacecraft.
+        alt_sc: The altitude of the spacecraft in meters.
         beam_width: The sensor beam width.
 
     Return:
@@ -595,8 +595,104 @@ def calculate_footprint_weights(
 
     vec_c = np.broadcast_to(vec_c, vec.shape)
     angs = np.rad2deg(
-        np.arccos((vec * vec_c).sum(-1) / np.sqrt(np.sum(vec ** 2, -1) * np.sum(vec_c ** 2, -1)))
+        np.arccos(
+            np.minimum((vec * vec_c).sum(-1) / np.sqrt(np.sum(vec ** 2, -1) * np.sum(vec_c ** 2, -1)), 1.0)
+        )
     )
     vec_c = np.stack((x_c, y_c, z_c), -1)[None, None] - vec_sc
-    ap = np.exp(np.log(0.5) * (2.0 * angs / 0.98) ** 2)
+    ap = np.exp(np.log(0.5) * (2.0 * angs / beam_width) ** 2)
     return ap
+
+
+def calculate_footprint_averages(
+        data: xr.DataArray,
+        longitudes: xr.DataArray,
+        latitudes: xr.DataArray,
+        sensor_longitudes: xr.DataArray,
+        sensor_latitudes: xr.DataArray,
+        sensor_altitudes: xr.DataArray,
+        beam_width: float,
+        area_of_influence: float = 1.0
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Resample a given data array by calculating footprint averages.
+
+    Args:
+        data: A xarray.DataArray containing the data to resample.
+        longitudes: A xarray.DataAttary containing the longitude coordinates to which to resample
+            'data'.
+        latitudes: A xarray.DataArray containing the latitude coordinates to which to resample
+            'data'.
+        sensor_longitudes: An xarray.DataArray containing the longitude coordinates of the sensor position
+            corresponding to all observed pixels.
+        sensor_latitudes: An xarray.DataArray containing the latitude coordinates of the sensor position
+            corresponding to all observed pixels.
+        beam_width: The beam width of the sensor.
+        area_of_influence: The extent of the are in degree to consider for the footprint averaging.
+
+    Return:
+        A tuple of number arrays ``(data_fpavg, valid_fractions)`` containing the footprint averaged
+        data and the corresponding fraction of valid pixels withing the footprint.
+    """
+    results = np.nan * np.zeros(
+        latitudes.shape + data.shape[2:],
+        dtype=data.dtype
+    )
+    valid_frac = np.zeros(
+        latitudes.shape + data.shape[2:],
+        dtype=data.dtype
+    )
+
+    sensor_longitudes, _ = xr.broadcast(sensor_longitudes, latitudes)
+    sensor_latitudes, _ = xr.broadcast(sensor_latitudes, latitudes)
+    sensor_altitudes, _ = xr.broadcast(sensor_altitudes, latitudes)
+
+    lons_data = data.longitude.data
+    lats_data = data.latitude.data
+    lon_min, lon_max = lons_data.min(), lons_data.max()
+    lat_min, lat_max = lats_data.min(), lats_data.max()
+
+    lons = longitudes.data
+    lats = latitudes.data
+
+    valid = (
+        (lons >= lon_min) * (lons <= lon_max) *
+        (lats >= lat_min) * (lats <= lat_max)
+    )
+    scan_inds, pixel_inds = np.where(valid)
+
+    for scan_ind, pix_ind in zip(scan_inds, pixel_inds):
+
+        lon_p = longitudes.data[scan_ind, pix_ind]
+        lat_p = latitudes.data[scan_ind, pix_ind]
+        lon_s = sensor_longitudes.data[scan_ind, pix_ind]
+        lat_s = sensor_latitudes.data[scan_ind, pix_ind]
+        alt_s = sensor_altitudes.data[scan_ind, pix_ind]
+
+        lon_range = np.abs(lons_data - lon_p) < 0.5 * area_of_influence
+        lat_range = np.abs(lats_data - lat_p) < 0.5 * area_of_influence
+
+        data_fp = data[{"longitude": lon_range, "latitude": lat_range}]
+
+        lons_d = data_fp.longitude.data
+        lats_d = data_fp.latitude.data
+        if lons_d.ndim == 1:
+            lons_d, lats_d = np.meshgrid(lons_d, lats_d)
+
+        wgts = calculate_footprint_weights(
+            lons_d,
+            lats_d,
+            (lon_p, lat_p),
+            (lon_s, lat_s, alt_s),
+            beam_width=beam_width
+        )
+        wgts = wgts.__getitem__((...,) + (None,) * (data_fp.data.ndim - wgts.ndim))
+
+        valid_mask = np.isfinite(data_fp.data)
+        fp_sum = (wgts * np.where(valid_mask, data_fp.data, 0.0)).sum((0, 1))
+        wgt_sum = np.where(valid_mask, wgts, 0.0).sum((0, 1))
+
+        results[scan_ind, pix_ind] = fp_sum
+        valid_frac[scan_ind, pix_ind] = wgts.sum() / wgt_sum
+
+    return results, valid_frac
