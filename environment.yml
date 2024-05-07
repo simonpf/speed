@@ -1,4 +1,4 @@
-name: spree
+name: speed
 
 channels:
   - pytorch
@@ -9,3 +9,34 @@ dependencies:
   - poetry
   - satpy
   - notebook
+  - cryptography
+  - numpy
+  - cdsapi
+  - requests
+  - xarray
+  - pyproj
+  - appdirs
+  - boto3
+  - paramiko
+  - shapely
+  - sphinx_rtd_theme
+  - pytest
+  - appdirs
+  - scipy
+  - beautifulsoup4
+  - lxml
+  - netcdf4
+  - matplotlib
+  - cartopy
+  - seaborn
+  - cmocean
+  - hdf4
+  - hdf5
+  - pyhdf
+  - h5py
+  - cfgrib
+  - pip
+  - pip:
+    - git+https://github.com/see-geo/pansat@refactoring
+    - jupyterlab-vim
+    - bottleneck
