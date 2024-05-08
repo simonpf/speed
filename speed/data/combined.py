@@ -6,6 +6,7 @@ This module provides functions to extract precipitation retrieval
 reference data from GPM CMB and MIRS GMI retrievals.
 """
 import os
+import logging
 from pathlib import Path
 from typing import List, Optional
 from tempfile import TemporaryDirectory
@@ -26,6 +27,9 @@ import xarray as xr
 from speed.data.reference import ReferenceData
 from speed.data.utils import extract_scans, resample_data
 from speed.grids import GLOBAL
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def run_mirs(cmb_granule, gmi_granule):
@@ -192,14 +196,59 @@ class Combined(ReferenceData):
             cmb_filenames.append(granule.file_record.filename)
 
         cmb_data = xr.concat(results_cmb, "matched_scans")
-        data_r = resample_data(cmb_data, GLOBAL.grid, 5e3)
+
+        lons, lats = GLOBAL.grid.get_lonlats()
+        lons = lons[0]
+        lats = lats[..., 0]
+
+        lon_min = cmb_data.longitude.data.min()
+        lon_max = cmb_data.longitude.data.max()
+        shifted = False
+        if lon_max - lon_min > 180:
+            shifted = True
+            lons_cmb = cmb_data.longitude.data
+            lons_cmb = (lons_cmb % 360) - 180
+            lon_min = lons_cmb.min()
+            lon_max = lons_cmb.max()
+
+        cols = np.where((lon_min <= lons) * (lon_max >= lons))[0]
+        col_start = cols.min()
+        col_end = cols.max()
+        assert col_end - col_start < 2000
+
+        lat_min = cmb_data.latitude.data.min()
+        lat_max = cmb_data.latitude.data.max()
+        rows = np.where((lat_min <= lats) * (lat_max >= lats))[0]
+        row_start = rows.min()
+        row_end = rows.max()
+
+        LOGGER.info(
+            "Restricting grid %s %s %s %s",
+            col_start, col_end, row_start, row_end
+        )
+
+        grid = GLOBAL.grid[row_start: row_end, col_start:col_end]
+
+        data_r = resample_data(cmb_data, grid, 5e3)
         data_r.attrs["cmb_files"] = ",".join(str(cmb_filenames))
 
         if self.include_mirs:
+
             mirs_data = xr.concat(results_mirs, "Scanline")
+            if shifted:
+                mirs_data.longitude.data = (
+                    (mirs_data.longitude.data % 360) - 180
+                )
             mirs_data_r = resample_data(mirs_data, GLOBAL.grid, 15e3)
             data_r = xr.merge([mirs_data_r, data_r])
             data_r.attrs["gmi_l1c_files"] = ",".join(str(gmi_filenames))
+
+        if shifted:
+            lons = data_r.longitude.data
+            lons[:] = (lons + 360) % 360 - 180
+
+        data_r.attrs["lower_left_col"] = col_start
+        data_r.attrs["lower_left_row"] = row_start
 
         return data_r
 
