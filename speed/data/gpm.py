@@ -1,5 +1,5 @@
 """
-spre.data.gpm
+speed.data.gpm
 ==============
 
 This module contains the code to process GPM L1C data into SPREE collocations.
@@ -151,38 +151,6 @@ def load_l1c_brightness_temperatures(
     return tbs
 
 
-def interp_along_swath(ref_data, scan_time, dimension="time"):
-    """
-    Interpolate time-gridded data to swath.
-
-    Helper function that interpolates data with an independent time dimension
-    to swath data, where the time varies by scan.
-
-    Args:
-        ref_data: An xarray.Dataset containing the data to interpolate.
-        scan_time: An xarray.DataArray containing the scan times to which
-            to interpolate 'ref_data'.
-        dimension: The name of the time dimension along which to
-            interpolate.
-
-    Return:
-        The interpolated dataset.
-    """
-    time_bins = ref_data.time.data
-    time_bins = np.concatenate(
-        [
-            [time_bins[0] - 0.5 * (time_bins[1] - time_bins[0])],
-            time_bins[:-1] + 0.5 * (time_bins[1:] - time_bins[:-1]),
-            [time_bins[-1] + 0.5 * (time_bins[-1] - time_bins[-2])],
-        ],
-        axis=0,
-    )
-    inds = np.digitize(scan_time.astype(np.int64), time_bins.astype(np.int64))
-    inds = np.maximum(inds - 1, 0)
-    inds = xr.DataArray(inds, dims=(("latitude", "longitude")))
-    return ref_data[{"time": inds}]
-
-
 class GPMInput(InputData):
     """
     The GPMInput class provides functionality to load data from any sensor
@@ -203,7 +171,6 @@ class GPMInput(InputData):
         match: Tuple[Granule, List[Granule]],
         reference_data: ReferenceData,
         output_folder: Path,
-        lock: None,
     ) -> None:
         """
         Extract collocations from matched input and reference data.
@@ -216,7 +183,6 @@ class GPMInput(InputData):
                 reference data for the matched granules.
             output_folder: The base folder to which to write the extracted
                 collocations in native and gridded format.
-            lock: multiprocessing.Lock to use to synchronize file downloads.
         """
         inpt_granule, ref_granules = match
         ref_granules = list(ref_granules)
@@ -271,7 +237,7 @@ class GPMInput(InputData):
         preprocessor_data["tbs_mw"].attrs.update(self.characteristics["channels"])
         preprocessor_data["tbs_mw_gprof"].attrs.update(self.characteristics["channels_gprof"])
 
-        # Load and combine reference data for all matches granules
+        # Load and combine reference data for all matche granules
         ref_data = reference_data.load_reference_data(inpt_granule, ref_granules)
         if ref_data is None:
             LOGGER.info(
@@ -279,19 +245,21 @@ class GPMInput(InputData):
                 ref_granules
             )
             return None
-        if "time" in ref_data:
-            reference_data_r = ref_data.interp(
-                latitude=preprocessor_data.latitude,
-                longitude=preprocessor_data.longitude,
-                time=preprocessor_data.scan_time,
-                method="nearest",
-            )
-        else:
-            reference_data_r = ref_data.interp(
-                latitude=preprocessor_data.latitude,
-                longitude=preprocessor_data.longitude,
-                method="nearest",
-            )
+
+        reference_data_r = ref_data.interp(
+            latitude=preprocessor_data.latitude,
+            longitude=preprocessor_data.longitude,
+            method="nearest",
+        )
+        reference_data_fpavg = ref_data.load_reference_data_fpavg(inpt_granule, ref_granules)
+        for var in reference_data_fpavg:
+            if var in reference_data_r:
+                reference_data_r[var + "_fpavg"] = reference_data_fpavg[var]
+
+        row_start = ref_data.attrs.get("lower_left_row", 0)
+        n_rows = ref_data.latitude.size
+        col_start = ref_data.attrs.get("lower_left_col", 0)
+        n_cols = ref_data.longitude.size
 
         # Determine number of valid reference pixels in scene.
         if "surface_precip" in reference_data_r:
@@ -304,38 +272,17 @@ class GPMInput(InputData):
                 " surface precip pixels.",
                 np.isfinite(surface_precip).sum(),
             )
-
             return None
 
-        indices = calculate_grid_resample_indices(preprocessor_data, grids.GLOBAL)
+        grid = grids.GLOBAL.grid[
+            row_start:row_start + n_rows,
+            col_start:col_start + n_cols
+        ]
+
+        indices = calculate_grid_resample_indices(preprocessor_data, grid)
         preprocessor_data["row_index"] = indices.row_index
         preprocessor_data["col_index"] = indices.col_index
 
-        # Add IR data.
-        ir_time_range = inpt_granule.time_range.expand(timedelta(minutes=15))
-        if lock is not None:
-            lock.acquire()
-        try:
-            ir_files = merged_ir.get(time_range=ir_time_range)
-        finally:
-            if lock is not None:
-                lock.release()
-        ir_data = xr.concat(
-            [xr.load_dataset(rec.local_path) for rec in ir_files], "time"
-        )
-        ir_data = ir_data.rename(
-            {"lon": "longitude", "lat": "latitude", "Tb": "tbs_ir"}
-        )
-        tbs_ir = ir_data.tbs_ir.interpolate_na(dim="latitude", method="nearest")
-        tbs_ir = tbs_ir.interp(
-            latitude=preprocessor_data.latitude,
-            longitude=preprocessor_data.longitude,
-            time=preprocessor_data.scan_time,
-        )
-        preprocessor_data["tbs_ir"] = (("scans", "pixels"), tbs_ir.data)
-
-        ir_input_files = [rec.filename for rec in ir_files]
-        preprocessor_data.attrs["ir_input_files"] = ir_input_files
         gpm_input_file = inpt_granule.file_record.filename
         preprocessor_data.attrs["gpm_input_file"] = gpm_input_file
 
@@ -355,39 +302,11 @@ class GPMInput(InputData):
 
         # Save data in gridded format.
         preprocessor_data_r = resample_data(
-            preprocessor_data, grids.GLOBAL.grid, self.radius_of_influence
-        )
-
-        tbs_ir = ir_data.tbs_ir.interpolate_na(dim="latitude", method="nearest")
-        mean_time = preprocessor_data_r.scan_time.mean()
-        delta_t = np.abs(ir_data.tbs_ir.time - mean_time)
-        time_ind = np.argmin(delta_t.data)
-        tbs_ir = tbs_ir[{"time": time_ind}].rename({"time": "time_ir"})
-        preprocessor_data_r["tbs_ir"] = tbs_ir.interp(
-            latitude=preprocessor_data_r.latitude,
-            longitude=preprocessor_data_r.longitude
+            preprocessor_data, grid, self.radius_of_influence
         )
 
         indices = calculate_swath_resample_indices(
-            preprocessor_data, grids.GLOBAL, self.radius_of_influence
-        )
-
-        row_start = ref_data.attrs.get("lower_left_row", 0)
-        n_rows = ref_data.latitude.size
-        col_start = ref_data.attrs.get("lower_left_col", 0)
-        n_cols = ref_data.longitude.size
-        indices = indices[
-            {
-                "longitude": slice(col_start, col_start + n_cols),
-                "latitude": slice(row_start, row_start + n_rows),
-            }
-        ]
-        preprocessor_data_r = extract_rect(
-            preprocessor_data_r,
-            col_start,
-            col_start + n_cols,
-            row_start,
-            row_start + n_rows,
+            preprocessor_data, grid, self.radius_of_influence
         )
         ref_data["scan_index"] = indices.scan_index
         ref_data["pixel_index"] = indices.pixel_index
@@ -417,7 +336,6 @@ class GPMInput(InputData):
         day: int,
         reference_data: ReferenceData,
         output_folder: Path,
-        lock: Optional[multiprocessing.Lock] = None,
     ):
         """
         Process all collocations available on a given day.
@@ -430,7 +348,6 @@ class GPMInput(InputData):
                 reference data source.
             output_folder: The folder to which to write the extracted
                 collocations.
-            lock: Optional lock object to use to synchronize downloads.
         """
         start_time = datetime(year, month, day)
         end_time = start_time + timedelta(days=1)
@@ -440,25 +357,12 @@ class GPMInput(InputData):
             LOGGER.info(f"Starting processing of product '%s'.", product.name)
 
             # Get all available files of GPM product for given day.
-            if lock is not None:
-                lock.acquire()
-            try:
-                gpm_recs = product.get(time_range)
-                gpm_index = Index.index(product, gpm_recs)
-                LOGGER.info(
-                    f"Found %s files for %s/%s/%s.",
-                    len(gpm_recs), year, month, day
-                )
-            except (RuntimeError, KeyError):
-                gpm_index = get_index(product)
-                LOGGER.info(
-                    "Could not determine available files from provider. Using "
-                    "local registry."
-                )
-
-            finally:
-                if lock is not None:
-                    lock.release()
+            gpm_recs = product.get(time_range)
+            gpm_index = Index.index(product, gpm_recs)
+            LOGGER.info(
+                f"Found %s files for %s/%s/%s.",
+                len(gpm_recs), year, month, day
+            )
 
             # If reference data has a fixed domain, subset index to files
             # intersecting the domain.
@@ -468,15 +372,9 @@ class GPMInput(InputData):
             # Collect available reference data.
             reference_recs = []
             for granule in gpm_index.granules:
-                if lock is not None:
-                    lock.acquire()
-                try:
                     reference_recs += reference_data.pansat_product.get(
                         time_range=granule.time_range
                     )
-                finally:
-                    if lock is not None:
-                        lock.release()
             reference_index = Index.index(reference_data.pansat_product, reference_recs)
 
             # Calculate matches between input and reference data.
@@ -492,7 +390,7 @@ class GPMInput(InputData):
 
             for match in matches:
                 try:
-                    self.process_match(match, reference_data, output_folder, lock=lock)
+                    self.process_match(match, reference_data, output_folder)
                 except Exception as exc:
                     LOGGER.warning(
                         "The following exception was encountered when processing "

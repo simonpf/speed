@@ -11,7 +11,7 @@ from pansat.products.satellite.gpm import (
 from pansat.catalog import Index
 from pansat.environment import get_index
 from pansat.catalog.index import find_matches
-from pansat.products.ground_based import mrms
+from pansat.products.ground_based import mrms, gpm_gv
 from pansat.products.satellite.gpm import (
     l1c_r_gpm_gmi,
     l1c_gcomw1_amsr2,
@@ -88,14 +88,30 @@ def cmb_match(scope="session"):
 @pytest.fixture
 def mrms_match(scope="session"):
     """
-    Returns a tuple describing a matche between a GMI and a GPM CMB granule.
+    Returns a tuple describing a match between GMI and MRMS data.
     """
     start_time = "2019-01-01T00:12:00"
     end_time = "2019-01-02T00:12:00"
     time_range = TimeRange(start_time, end_time)
+    mrms.precip_rate.get(time_range)
+    l1c_r_gpm_gmi.get(time_range)
     mrms_index = get_index(mrms.precip_rate).subset(time_range)
     gmi_index = get_index(l1c_r_gpm_gmi).subset(time_range)
     matches = find_matches(gmi_index, mrms_index)
+    return matches[0]
+
+@pytest.fixture
+def gpm_gv_match(scope="session"):
+    """
+    Returns a tuple describing a match between GMI and GPM GV data.
+    """
+    start_time = "2019-01-01T00:12:00"
+    end_time = "2019-01-02T00:12:00"
+    time_range = TimeRange(start_time, end_time)
+    gpm_gv.precip_rate_gpm.get(time_range)
+    gpm_gv_index = get_index(gpm_gv.precip_rate_gpm).subset(time_range)
+    gmi_index = get_index(l1c_r_gpm_gmi).subset(time_range)
+    matches = find_matches(gmi_index, gpm_gv_index)
     return matches[0]
 
 

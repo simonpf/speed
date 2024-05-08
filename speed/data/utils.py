@@ -303,6 +303,7 @@ def resample_data(
     resampled["longitude"] = (("longitude",), lons_t[0, :])
 
     for var in dataset:
+        print("RESAMPLING :", var)
         if var in ["latitude", "longitude"]:
             continue
         data = dataset[var].data
@@ -354,7 +355,7 @@ def calculate_grid_resample_indices(dataset, target_grid):
     """
     lons = dataset.longitude.data
     lats = dataset.latitude.data
-    lons_t, lats_t = target_grid.grid.get_lonlats()
+    lons_t, lats_t = target_grid.get_lonlats()
     valid_pixels = (
         (lons_t >= lons.min())
         * (lons_t <= lons.max())
@@ -402,7 +403,7 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
     """
     lons = dataset.longitude.data
     lats = dataset.latitude.data
-    lons_t, lats_t = target_grid.grid.get_lonlats()
+    lons_t, lats_t = target_grid.get_lonlats()
     valid_pixels = (
         (lons_t >= lons.min())
         * (lons_t <= lons.max())
@@ -426,13 +427,13 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
     scan_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", target.shape, scan_inds, ind_in, ind_out, inds, fill_value=-1
     )
-    scan_inds_gridded = -np.ones(target_grid.grid.shape, dtype=np.int16)
+    scan_inds_gridded = -np.ones(target_grid.shape, dtype=np.int16)
     scan_inds_gridded[valid_pixels] = scan_inds_r
 
     pixel_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", target.shape, pixel_inds, ind_in, ind_out, inds, fill_value=-1
     )
-    pixel_inds_gridded = -np.ones(target_grid.grid.shape, dtype=np.int16)
+    pixel_inds_gridded = -np.ones(target_grid.shape, dtype=np.int16)
     pixel_inds_gridded[valid_pixels] = pixel_inds_r
 
     return xr.Dataset(
@@ -612,7 +613,9 @@ def calculate_footprint_averages(
         sensor_latitudes: xr.DataArray,
         sensor_altitudes: xr.DataArray,
         beam_width: float,
-        area_of_influence: float = 1.0
+        area_of_influence: float = 1.0,
+        sensor_time: Optional[xr.DataArray] = None,
+        max_time_diff: Optional[np.timedelta64] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Resample a given data array by calculating footprint averages.
@@ -629,23 +632,26 @@ def calculate_footprint_averages(
             corresponding to all observed pixels.
         beam_width: The beam width of the sensor.
         area_of_influence: The extent of the are in degree to consider for the footprint averaging.
+        sensor_time: A DataArray of the same shape as longitudes and latitudes containing the observations
+            times for all pixels.
+        max_time_diff: An optional limit on the time difference between the data to resample and the
+             observations to limit the amount of calculations.
 
     Return:
         A tuple of number arrays ``(data_fpavg, valid_fractions)`` containing the footprint averaged
         data and the corresponding fraction of valid pixels withing the footprint.
     """
-    results = np.nan * np.zeros(
-        latitudes.shape + data.shape[2:],
-        dtype=data.dtype
-    )
-    valid_frac = np.zeros(
-        latitudes.shape + data.shape[2:],
-        dtype=data.dtype
-    )
-
     sensor_longitudes, _ = xr.broadcast(sensor_longitudes, latitudes)
     sensor_latitudes, _ = xr.broadcast(sensor_latitudes, latitudes)
     sensor_altitudes, _ = xr.broadcast(sensor_altitudes, latitudes)
+
+    sensor_dims = sensor_latitudes.dims[:2]
+    results = {
+        var: (
+            (sensor_dims + data[var].dims[:2])[:data[var].data.ndim],
+            np.nan * np.zeros(latitudes.shape + data[var].shape[2:], dtype=data[var].dtype)
+        ) for var in data if var != "time"
+    }
 
     lons_data = data.longitude.data
     lats_data = data.latitude.data
@@ -659,7 +665,18 @@ def calculate_footprint_averages(
         (lons >= lon_min) * (lons <= lon_max) *
         (lats >= lat_min) * (lats <= lat_max)
     )
+    if max_time_diff is not None and "time" in data:
+        dtype = data.time.dtype
+        if "latitude" in data.time.dims:
+            time = data.time.astype(np.int64).interp(latitude=latitudes, longitude=longitudes, method="nearest")
+            time = time.astype(dtype)
+        else:
+            time = data.time
+        time_diff = time - sensor_time
+        valid = valid * (time_diff.data < max_time_diff)
+
     scan_inds, pixel_inds = np.where(valid)
+
 
     for scan_ind, pix_ind in zip(scan_inds, pixel_inds):
 
@@ -686,13 +703,51 @@ def calculate_footprint_averages(
             (lon_s, lat_s, alt_s),
             beam_width=beam_width
         )
-        wgts = wgts.__getitem__((...,) + (None,) * (data_fp.data.ndim - wgts.ndim))
 
-        valid_mask = np.isfinite(data_fp.data)
-        fp_sum = (wgts * np.where(valid_mask, data_fp.data, 0.0)).sum((0, 1))
-        wgt_sum = np.where(valid_mask, wgts, 0.0).sum((0, 1))
+        for var in data_fp:
+            if var == "time":
+                continue
+            wgts_var = wgts.__getitem__((...,) + (None,) * (data_fp[var].data.ndim - wgts.ndim))
+            valid_mask = np.isfinite(data_fp[var].data)
+            fp_sum = (wgts_var * np.where(valid_mask, data_fp[var].data, 0.0)).sum((0, 1))
+            wgt_sum = np.where(valid_mask, wgts_var, 0.0).sum((0, 1))
+            results[var][-1][scan_ind, pix_ind] = fp_sum
 
-        results[scan_ind, pix_ind] = fp_sum
-        valid_frac[scan_ind, pix_ind] = wgts.sum() / wgt_sum
+    return xr.Dataset(results)
 
-    return results, valid_frac
+
+def interp_along_swath(ref_data, scan_time, dimension="time"):
+    """
+    Interpolate time-gridded data to swath.
+
+    Helper function that interpolates data with an independent time dimension
+    to swath data, where the time varies by scan.
+
+    Args:
+        ref_data: An xarray.Dataset containing the data to interpolate.
+        scan_time: An xarray.DataArray containing the scan times to which
+            to interpolate 'ref_data'.
+        dimension: The name of the time dimension along which to
+            interpolate.
+
+    Return:
+        The interpolated dataset.
+    """
+    if ref_data.time.size == 1:
+        return ref_data[{"time": 0}]
+
+    time_bins = ref_data.time.data
+    time_bins = np.concatenate(
+        [
+            [time_bins[0] - 0.5 * (time_bins[1] - time_bins[0])],
+            time_bins[:-1] + 0.5 * (time_bins[1:] - time_bins[:-1]),
+            [time_bins[-1] + 0.5 * (time_bins[-1] - time_bins[-2])],
+        ],
+        axis=0,
+    )
+    scan_time = scan_time.astype(ref_data.time.dtype)
+    inds = np.digitize(scan_time.astype(np.int64), time_bins.astype(np.int64))
+    inds = np.minimum(np.maximum(inds - 1, 0), ref_data.time.size - 1)
+    print(inds, time_bins)
+    inds = xr.DataArray(inds, dims=(("latitude", "longitude")))
+    return ref_data[{"time": inds}]

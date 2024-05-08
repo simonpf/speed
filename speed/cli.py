@@ -72,7 +72,6 @@ def extract_data(
 
     pool = ProcessPoolExecutor(max_workers=n_processes)
     manager = multiprocessing.Manager()
-    lock = manager.Lock()
 
     tasks = {}
     for day in days:
@@ -83,7 +82,6 @@ def extract_data(
             day,
             reference_dataset,
             output_folder,
-            lock=lock,
         )
         tasks[task] = (year, month, day)
 

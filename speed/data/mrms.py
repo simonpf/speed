@@ -13,54 +13,21 @@ import dask.array as da
 import numpy as np
 from pansat import FileRecord, TimeRange, Granule
 from pansat.products.ground_based import mrms
+from pyresample.geometry import AreaDefinition
 from pansat.catalog import Index
-from pyresample.bucket import BucketResampler
 from scipy.signal import convolve
 import xarray as xr
 
 from speed.data.reference import ReferenceData
 from speed.grids import GLOBAL
-from speed.data.utils import get_smoothing_kernel, extract_rect
+from speed.data.utils import (
+    get_smoothing_kernel,
+    extract_rect,
+    calculate_footprint_averages
+)
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-PRECIP_CLASSES = {
-    0: "No precipitation",
-    1: "Warm stratiform rain",
-    3: "Snow",
-    6: "Convection",
-    7: "Hail",
-    10: "Cool stratiform rain",
-    91: "Tropical stratiform rain",
-    96: "Tropical convective rain",
-}
-
-
-_RESAMPLER = None
-
-
-def get_resampler(mrms_data: xr.Dataset) -> BucketResampler:
-    """
-    Get resampler for MRMS grids.
-
-    Args:
-        mrms_data: xarray.Dataset containing MRMS data.
-
-    Return:
-        A pyresample bucket resampler object that can be used to resample
-        MRMS data to the global SPEED grid.
-    """
-    global _RESAMPLER
-    if _RESAMPLER is not None:
-        return _RESAMPLER
-    lons = mrms_data.longitude.data
-    lats = mrms_data.latitude.data
-    lons, lats = np.meshgrid(lons, lats)
-
-    _RESAMPLER = BucketResampler(GLOBAL.grid, da.from_array(lons), da.from_array(lats))
-    return _RESAMPLER
 
 
 def smooth_field(data: np.ndarray) -> np.ndarray:
@@ -71,7 +38,7 @@ def smooth_field(data: np.ndarray) -> np.ndarray:
         data: The input MRMS array as 0.01 resolution.
 
     Return:
-        A numpy.ndarray containing the smoothed arrary.
+        The input field smoothed using a Gaussien filter with a FWHM of 0.036 degree.
     """
     k = get_smoothing_kernel(0.036, 0.01)
     invalid = np.isnan(data)
@@ -90,8 +57,8 @@ def smooth_field(data: np.ndarray) -> np.ndarray:
 
 def resample_scalar(data: xr.DataArray) -> xr.DataArray:
     """
-    Resamples scalar data (such as surface precip or RQI) using the
-    bucket resampler.
+    Resamples scalar data (such as surface precip or RQI) using smoothing
+    followed by linear interpolation.
 
     Args:
         data: A xarray.DataArray containing the data
@@ -135,6 +102,306 @@ def resample_categorical(data: xr.DataArray, classes) -> xr.DataArray:
     return data_r
 
 
+def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
+    """
+    Load all MRMS data corresponding to a single MRMS precip rate granule.
+
+    Args:
+        granule: A granule object defining a MRMS precip rate file.
+
+    Return:
+        An xarray.Dataset containing the surface precip rate, precipitation
+        type, radar quality index, and gauge-correction factor.
+    """
+    input_files = []
+    precip_rate_rec = granule.file_record
+    precip_rate_rec = precip_rate_rec.get()
+    time_range = precip_rate_rec.temporal_coverage
+
+    # Load and resample precip rate.
+    precip_data = mrms.precip_rate.open(precip_rate_rec)
+    input_files.append(precip_rate_rec.filename)
+
+    # Find and resample corresponding radar quality index data.
+    rqi_recs = mrms.radar_quality_index.get(precip_rate_rec.central_time)
+    rqi_rec = precip_rate_rec.find_closest_in_time(rqi_recs)[0]
+    if precip_rate_rec.time_difference(rqi_rec).total_seconds() > 0:
+        return None
+    rqi_data = mrms.radar_quality_index.open(rqi_rec)
+    input_files.append(rqi_rec.filename)
+
+    # Find and resample precip flag data.
+    precip_flag_recs = mrms.precip_flag.get(precip_rate_rec.central_time)
+    precip_flag_rec = precip_rate_rec.find_closest_in_time(precip_flag_recs)[0]
+    if precip_rate_rec.time_difference(precip_flag_rec).total_seconds() > 0:
+        return None
+    precip_flag_data = mrms.precip_flag.open(precip_flag_rec)
+    input_files.append(precip_flag_rec.filename)
+
+    # Find and resample gauge correction factors.
+    precip_1h_gc_recs = mrms.precip_1h_gc.get(precip_rate_rec.central_time)
+    if len(precip_1h_gc_recs) == 0:
+        precip_1h_gc_recs = mrms.precip_1h_ms.get(precip_rate_rec.central_time)
+    precip_1h_gc_rec = precip_rate_rec.find_closest_in_time(precip_1h_gc_recs)[0]
+    if precip_rate_rec.time_difference(precip_1h_gc_rec).total_seconds() > 0:
+        LOGGER.warning(
+            "Couldn't find matching gauge-corrected MRMS measurements for "
+            "MRMS precip rate file '%s'.",
+            precip_rate_rec.filename
+        )
+        return None
+
+    precip_1h_ro_recs = mrms.precip_1h.get(precip_1h_gc_rec.central_time)
+    parts = precip_1h_gc_rec.filename.split("_")
+    parts[0] = "RadarOnly"
+    ro_filename = "_".join(parts)
+    precip_1h_ro_rec = [
+        rec for rec in precip_1h_ro_recs if rec.filename == ro_filename
+    ]
+    if len(precip_1h_ro_rec) == 0:
+        LOGGER.warning(
+            "Couldn't find matching radar-only MRMS measurements for "
+            "MRMS precip rate file '%s'.",
+            precip_rate_rec.filename
+        )
+        return None
+    precip_1h_ro_rec = precip_1h_ro_rec[0].get()
+    precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec).drop_vars(["time", "valid_time"])
+    precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec).drop_vars(["time", "valid_time"])
+    corr_factor_data = precip_1h_gc_data.precip_1h_gc / precip_1h_ro_data.precip_1h
+
+    input_files.append(precip_1h_ro_rec.filename)
+    input_files.append(precip_1h_gc_rec.filename)
+
+    data = xr.Dataset({
+        "surface_precip": precip_data.precip_rate * corr_factor_data,
+        "radar_quality_index": rqi_data.radar_quality_index,
+        "precip_type": precip_flag_data.precip_flag,
+        "gauge_correction_factor": corr_factor_data
+    })
+
+    data.attrs["input_files"] = input_files
+    return data
+
+
+def downsample_mrms_data(
+        mrms_data: xr.Dataset,
+        grid: Optional[AreaDefinition] = None
+) -> xr.Dataset:
+    """
+    Downsample MRMS dat to 0.036 resolution.
+
+    The downsampling also converts the precip flag types to occurrences fractions for rain,
+    snow, hail, convective and stratiform precipitation.
+
+    Args:
+        mrms_data: A xarray.Dataset containing the combining MRMS data for a given time step.
+        grid: The grid to which to resample the data.
+
+
+    Return:
+        A new xarray.Dataset containing the downsampled MRMS data.
+
+    """
+
+    valid_mask = (
+        (mrms_data["surface_precip"].data >= 0.0) *
+        (mrms_data["precip_type"].data >= 0) *
+        (mrms_data["radar_quality_index"].data >= 0.0) *
+        np.isfinite(mrms_data["gauge_correction_factor"].data)
+    )
+
+    if grid is None:
+        lons, lats = GLOBAL.grid.get_lonlats()
+        lons = lons[0]
+        lats = lats[..., 0]
+        lons_ref = mrms_data.longitude.data
+        lats_ref = mrms_data.latitude.data
+        lon_min = lons_ref.min()
+        lon_max = lons_ref.max()
+        lat_min = lats_ref.min()
+        lat_max = lats_ref.max()
+        valid_lons = np.where((lons >= lon_min) * (lons <= lon_max))[0]
+        valid_lats = np.where((lats >= lat_min) * (lats <= lat_max))[0]
+        lon_start = valid_lons.min()
+        lon_end = valid_lons.max()
+        lat_start = valid_lats.min()
+        lat_end = valid_lats.max()
+        grid = GLOBAL.grid[lat_start:lat_end, lon_start:lon_end]
+
+    valid_fraction = smooth_field(valid_mask.astype(np.float32))
+
+    surface_precip = mrms_data["surface_precip"].data
+    surface_precip[~valid_mask] = np.nan
+    surface_precip = smooth_field(surface_precip)
+
+    gauge_correction_factor = mrms_data["gauge_correction_factor"].data
+    gauge_correction_factor[~valid_mask] = np.nan
+    gauge_correction_factor = smooth_field(gauge_correction_factor)
+
+    radar_quality_index = mrms_data["radar_quality_index"].data
+    radar_quality_index[~valid_mask] = np.nan
+    radar_quality_index = smooth_field(radar_quality_index)
+
+    rain_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
+    rain_fraction[~valid_mask] = np.nan
+    rain_fraction = smooth_field(rain_fraction)
+
+    snow_fraction = (
+        (mrms_data["precip_type"].data == 3.0) +
+        (mrms_data["precip_type"].data == 4.0)
+    ).astype(np.float32)
+
+    snow_fraction[~valid_mask] = np.nan
+    snow_fraction = smooth_field(snow_fraction)
+
+    hail_fraction = (mrms_data["precip_type"].data == 7.0).astype(np.float32)
+    hail_fraction[~valid_mask] = np.nan
+    hail_fraction = smooth_field(hail_fraction)
+
+    conv_fraction = (
+        (mrms_data["precip_type"].data == 6.0) +
+        (mrms_data["precip_type"].data == 96.0)
+    ).astype(np.float32)
+    conv_fraction[~valid_mask] = np.nan
+    conv_fraction = smooth_field(conv_fraction)
+
+    strat_fraction = (
+        (mrms_data["precip_type"].data == 1.0) +
+        (mrms_data["precip_type"].data == 2.0) +
+        (mrms_data["precip_type"].data == 10.0) +
+        (mrms_data["precip_type"].data == 91.0)
+    ).astype(np.float32)
+    strat_fraction[~valid_mask] = np.nan
+    strat_fraction = smooth_field(strat_fraction)
+
+    smoothed = xr.Dataset({
+        "latitude": (("latitude",), mrms_data.latitude.data),
+        "longitude": (("longitude",), mrms_data.longitude.data),
+        "surface_precip": (("latitude", "longitude"), surface_precip),
+        "surface_precip_nn": (("latitude", "longitude"), mrms_data.surface_precip.data),
+        "gauge_correction_factor": (("latitude", "longitude"), gauge_correction_factor),
+        "gauge_correction_factor_nn": (("latitude", "longitude"), mrms_data.gauge_correction_factor.data),
+        "radar_quality_index": (("latitude", "longitude"), radar_quality_index),
+        "radar_quality_index_nn": (("latitude", "longitude"), mrms_data.radar_quality_index.data),
+        "valid_fraction": (("latitude", "longitude"), valid_fraction),
+        "rain_fraction": (("latitude", "longitude"), rain_fraction),
+        "snow_fraction": (("latitude", "longitude"), snow_fraction),
+        "convective_fraction": (("latitude", "longitude"), conv_fraction),
+        "stratiform_fraction": (("latitude", "longitude"), strat_fraction), "hail_fraction": (("latitude", "longitude"), hail_fraction),
+    })
+
+    lons, lats = grid.get_lonlats()
+    lons = lons[0]
+    lats = lats[..., 0]
+    downsampled = smoothed.interp(latitude=lats, longitude=lons, method="nearest")
+    return downsampled, grid
+
+
+def footprint_average_mrms_data(
+        mrms_data: xr.Dataset,
+        longitudes: xr.DataArray,
+        latitudes: xr.DataArray,
+        scan_time: xr.DataArray,
+        sensor_longitudes: xr.DataArray,
+        sensor_latitudes: xr.DataArray,
+        sensor_altitudes: xr.DataArray,
+        beam_width: float,
+        area_of_influence: float
+) -> xr.Dataset:
+    """
+    Downsample MRMS data to sensor resolution using downsampling.
+
+    Args:
+        mrms_data: A xarray.Dataset containing the combining MRMS data for a given time step.
+        longitudes: A xarray.DataAttary containing the longitude coordinates to which to resample
+            'data'.
+        latitudes: A xarray.DataArray containing the latitude coordinates to which to resample
+            'data'.
+        sensor_longitudes: An xarray.DataArray containing the longitude coordinates of the sensor position
+            corresponding to all observed pixels.
+        sensor_latitudes: An xarray.DataArray containing the latitude coordinates of the sensor position
+            corresponding to all observed pixels.
+        beam_width: The beam width of the sensor.
+        area_of_influence: The extent of the are in degree to consider for the footprint averaging.
+
+
+    Return:
+        A new xarray.Dataset containing the downsampled MRMS data downsampled to the snsor footprints.
+    """
+    scan_time, _ = xr.broadcast(scan_time, latitudes)
+
+
+    valid_mask = (
+        (mrms_data["surface_precip"].data >= 0.0) *
+        (mrms_data["precip_type"].data >= 0) *
+        (mrms_data["radar_quality_index"].data >= 0.0) *
+        np.isfinite(mrms_data["gauge_correction_factor"].data)
+    )
+    surface_precip = mrms_data["surface_precip"].data
+    surface_precip[~valid_mask] = np.nan
+    gauge_correction_factor = mrms_data["gauge_correction_factor"].data
+    gauge_correction_factor[~valid_mask] = np.nan
+    radar_quality_index = mrms_data["radar_quality_index"].data
+    radar_quality_index[~valid_mask] = np.nan
+
+    rain_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
+    rain_fraction[~valid_mask] = np.nan
+
+    snow_fraction = (
+        (mrms_data["precip_type"].data == 3.0) +
+        (mrms_data["precip_type"].data == 4.0)
+    ).astype(np.float32)
+    snow_fraction[~valid_mask] = np.nan
+
+    hail_fraction = (mrms_data["precip_type"].data == 7.0).astype(np.float32)
+    hail_fraction[~valid_mask] = np.nan
+
+    conv_fraction = (
+        (mrms_data["precip_type"].data == 6.0) +
+        (mrms_data["precip_type"].data == 96.0)
+    ).astype(np.float32)
+    conv_fraction[~valid_mask] = np.nan
+
+    strat_fraction = (
+        (mrms_data["precip_type"].data == 1.0) +
+        (mrms_data["precip_type"].data == 2.0) +
+        (mrms_data["precip_type"].data == 10.0) +
+        (mrms_data["precip_type"].data == 91.0)
+    ).astype(np.float32)
+    strat_fraction[~valid_mask] = np.nan
+
+    data = xr.Dataset({
+        "latitude": (("latitude",), mrms_data.latitude.data),
+        "longitude": (("longitude",), mrms_data.longitude.data),
+        "surface_precip": (("latitude", "longitude"), surface_precip),
+        "gauge_correction_factor": (("latitude", "longitude"), gauge_correction_factor),
+        "radar_quality_index": (("latitude", "longitude"), radar_quality_index),
+        "valid_fraction": (("latitude", "longitude"), valid_mask.astype(np.float32)),
+        "rain_fraction": (("latitude", "longitude"), rain_fraction),
+        "snow_fraction": (("latitude", "longitude"), snow_fraction),
+        "convective_fraction": (("latitude", "longitude"), conv_fraction),
+        "stratiform_fraction": (("latitude", "longitude"), strat_fraction),
+        "hail_fraction": (("latitude", "longitude"), hail_fraction),
+        "time": mrms_data.time
+    })
+
+    data_fpavg = calculate_footprint_averages(
+            data,
+            longitudes,
+            latitudes,
+            sensor_longitudes,
+            sensor_latitudes,
+            sensor_altitudes,
+            beam_width,
+            area_of_influence=area_of_influence,
+            sensor_time=scan_time,
+            max_time_diff=np.timedelta64(60, "s")
+    )
+    return data_fpavg
+
+
+
 class MRMS(ReferenceData):
     """
     Reference data class for processing MRMS data.
@@ -170,130 +437,91 @@ class MRMS(ReferenceData):
 
         input_files = []
 
+        grid = None
+        data_resampled = []
+
         for granule in granules:
-            precip_rate_rec = granule.file_record
-            precip_rate_rec = precip_rate_rec.get()
-            time_range = precip_rate_rec.temporal_coverage
 
-            dims = ("latitude", "longitude")
+            mrms_data = load_mrms_data(granule)
 
-            # Load and resample precip rate.
-            precip_data = mrms.precip_rate.open(precip_rate_rec)
-            lon_indices = (precip_data.longitude.data > lon_min) * (
-                precip_data.longitude.data < lon_max
-            )
-            lat_indices = (precip_data.latitude.data > lat_min) * (
-                precip_data.latitude.data < lat_max
-            )
-            precip_data = precip_data[
-                {"longitude": lon_indices, "latitude": lat_indices}
-            ]
+            if col_start is not None:
+                lon_indices = np.where((mrms_data.longitude.data >= lon_min) * (mrms_data.longitude.data <= lon_max))[0]
+                lat_indices = np.where((mrms_data.latitude.data >= lat_min) * (mrms_data.latitude.data <= lat_max))[0]
+                row_start = lat_indices.min()
+                row_end = lat_indices.max()
+                col_start = lon_indices.min()
+                col_end = lon_indices.max()
+            mrms_data = mrms_data[{"latitude": slice(row_start, row_end), "longitude": slice(row_start, row_end)}]
 
-            missing = precip_data.precip_rate.data < 0
-            precip_data.precip_rate.data[missing] = np.nan
-            precip_data_r = resample_scalar(precip_data.precip_rate)
+            input_files += mrms_data.attrs["input_files"]
+            mrms_data_r, grid = downsample_mrms_data(mrms_data, grid=grid)
+            data_resampled.append(mrms_data_r)
+
+        mrms_data = xr.concat(data_resampled, "time").sortby("time")
+        mrms_data.attrs["mrms_input_files"] = input_files
+        return mrms_data
+
+    def load_reference_data_fpavg(
+        self,
+        input_granule: Granule,
+        granules: List[Granule],
+        beam_width: float
+    ):
+
+        input_data = input_granule.open()
+        latitudes = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
+        longitudes = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
+        sensor_latitude = input_data.spacecraft_latitude
+        sensor_longitude = input_data.spacecraft_longitude
+        sensor_altitude = input_data.spacecraft_altitude
+
+        coords = input_granule.geometry.bounding_box_corners
+        lon_min, lat_min, lon_max, lat_max = coords
+
+        ref_data = []
+
+        col_start = None
+        col_end = None
+        row_start = None
+        row_end = None
+
+        input_files = []
+
+        data_combined = Non
+
+        for granule in granules:
+
+            mrms_data = load_mrms_data(granule)
 
             if col_start is None:
-                valid = np.isfinite(precip_data_r.data)
-                row_inds, col_inds = np.where(valid)
-                col_start = col_inds.min()
-                col_end = col_inds.max() + 1
-                row_start = row_inds.min()
-                row_end = row_inds.max()
+                lon_indices = np.where((mrms_data.longitude.data >= lon_min) * (mrms_data.longitude.data <= lon_max))[0]
+                lat_indices = np.where((mrms_data.latitude.data >= lat_min) * (mrms_data.latitude.data <= lat_max))[0]
+                row_start = lat_indices.min()
+                row_end = lat_indices.max()
+                col_start = lon_indices.min()
+                col_end = lon_indices.max()
 
-            data_arrays = {
-                "surface_precip": extract_rect(
-                    precip_data_r, col_start, col_end, row_start, row_end
-                )
-            }
-            input_files.append(precip_rate_rec.filename)
-
-            # Find and resample corresponding radar quality index data.
-            rqi_recs = mrms.radar_quality_index.get(precip_rate_rec.temporal_coverage)
-            rqi_rec = precip_rate_rec.find_closest_in_time(rqi_recs)[0]
-            if precip_rate_rec.time_difference(rqi_rec).total_seconds() > 0:
-                return None
-            else:
-                rqi_data = mrms.radar_quality_index.open(rqi_rec)
-                rqi_data = rqi_data[{"longitude": lon_indices, "latitude": lat_indices}]
-                missing = rqi_data.radar_quality_index.data < 0
-                rqi_data.radar_quality_index.data[missing] = np.nan
-                rqi_data_r = resample_scalar(rqi_data.radar_quality_index)
-                data_arrays["radar_quality_index"] = extract_rect(
-                    rqi_data_r, col_start, col_end, row_start, row_end
-                )
-                input_files.append(rqi_rec.filename)
-
-            # Find and resample precip flag data.
-            precip_flag_recs = mrms.precip_flag.get(precip_rate_rec.temporal_coverage)
-            precip_flag_rec = precip_rate_rec.find_closest_in_time(precip_flag_recs)[0]
-            if precip_rate_rec.time_difference(precip_flag_rec).total_seconds() > 0:
-                return None
-            else:
-                precip_flag_data = mrms.precip_flag.open(precip_flag_rec)
-                precip_flag_data = precip_flag_data[
-                    {"longitude": lon_indices, "latitude": lat_indices}
-                ]
-                precip_flag_data_r = resample_categorical(
-                    precip_flag_data.precip_flag, PRECIP_CLASSES
-                )
-                data_arrays["precip_flag"] = extract_rect(
-                    precip_flag_data_r, col_start, col_end, row_start, row_end
-                )
-                input_files.append(precip_flag_rec.filename)
-
-            # Find and resample gauge correction factors.
-            precip_1h_gc_recs = mrms.precip_1h_gc.get(precip_rate_rec.temporal_coverage)
-            if len(precip_1h_gc_recs) == 0:
-                precip_1h_gc_recs = mrms.precip_1h_ms.get(precip_rate_rec.temporal_coverage)
-            precip_1h_gc_rec = precip_rate_rec.find_closest_in_time(precip_1h_gc_recs)[0]
-            if precip_rate_rec.time_difference(precip_1h_gc_rec).total_seconds() > 0:
-                LOGGER.warning(
-                    "Couldn't find matching gauge-corrected MRMS measurements for "
-                    "MRMS precip rate file '%s'.",
-                    precip_rate_rec.filename
-                )
-                return None
-
-            precip_1h_ro_recs = mrms.precip_1h.get(precip_1h_gc_rec.temporal_coverage)
-            parts = precip_1h_gc_rec.filename.split("_")
-            parts[0] = "RadarOnly"
-            ro_filename = "_".join(parts)
-            precip_1h_ro_rec = [
-                rec for rec in precip_1h_ro_recs if rec.filename == ro_filename
-            ]
-            if len(precip_1h_ro_rec) == 0:
-                LOGGER.warning(
-                    "Couldn't find matching radar-only MRMS measurements for "
-                    "MRMS precip rate file '%s'.",
-                    precip_rate_rec.filename
-                )
-                return None
-            precip_1h_ro_rec = precip_1h_ro_rec[0].get()
-            precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec)
-            precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec)
-            corr_factor_data = precip_1h_gc_data.precip_1h_gc / precip_1h_ro_data.precip_1h
-            mask = corr_factor_data.data == np.inf
-            corr_factor_data.data[mask] = 1.0
-            corr_factor_data = corr_factor_data[
-                {"longitude": lon_indices, "latitude": lat_indices}
-            ]
-            corr_factor_r = resample_scalar(corr_factor_data)
-            data_arrays["gauge_correction"] = extract_rect(
-                corr_factor_r, col_start, col_end, row_start, row_end
+            mrms_data = mrms_data[{"latitude": slice(row_start, row_end), "longitude": slice(row_start, row_end)}]
+            input_files += mrms_data.attrs["input_files"]
+            mrms_data_r = footprint_average_mrms_data(
+                mrms_data,
+                longitudes,
+                latitudes,
+                scan_time,
+                sensor_longitude,
+                sensor_latitude,
+                sensor_altitude,
+                beam_width=beam_width,
+                area_of_influence=1.0
             )
+            if data_combined is None:
+                data_combined = mrms_data_r
+            else:
+                for var in data_combined:
+                    mask = np.isfinite(mrms_data_r[var].data)
+                    data_combined[var].data[mask] = mrms_data_r[var].data[mask]
 
-            input_files.append(precip_1h_ro_rec.filename)
-            input_files.append(precip_1h_gc_rec.filename)
-
-            data = xr.Dataset(data_arrays)
-            data["time"] = precip_data.time
-            data.attrs = data_arrays["surface_precip"].attrs
-            ref_data.append(data)
-
-        ref_data = xr.concat(ref_data, "time").sortby("time")
-        ref_data.attrs["mrms_input_files"] = input_files
-        return ref_data
+        return data_combined
 
 
 mrms_data = MRMS("mrms")

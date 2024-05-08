@@ -11,7 +11,8 @@ from speed.data.utils import (
     get_smoothing_kernel,
     resample_data,
     calculate_footprint_weights,
-    calculate_footprint_averages
+    calculate_footprint_averages,
+    interp_along_swath
 )
 from gprof_nn.data.l1c import L1CFile
 
@@ -85,13 +86,11 @@ def test_resample_data(preprocessor_data):
     """
     Test resample of gmi observations to global grid and ensure that:
       - Means of valid resample data is approximately conserved.
-
-
     """
     preprocessor_data_r = resample_data(preprocessor_data, grids.GLOBAL.grid, 10e3)
 
-    tbs = preprocessor_data.tbs_mw.data
-    tbs_r = preprocessor_data_r.tbs_mw.data
+    tbs = preprocessor_data.tbs_mw_gprof.data
+    tbs_r = preprocessor_data_r.tbs_mw_gprof.data
 
     valid = np.isfinite(tbs_r).any(-1)
 
@@ -114,7 +113,7 @@ def test_calculate_grid_resample_indices(gmi_granule):
     })
     indices = calculate_grid_resample_indices(
         l1c_data,
-        grids.GLOBAL,
+        grids.GLOBAL.grid,
     )
 
     lons, lats = grids.GLOBAL.grid.get_lonlats()
@@ -145,7 +144,7 @@ def test_calculate_swath_resample_indices(gmi_granule):
    })
    indices = calculate_swath_resample_indices(
        l1c_data,
-       grids.GLOBAL,
+       grids.GLOBAL.grid,
        100
    )
 
@@ -190,6 +189,7 @@ def test_calculate_footprint_weights():
     )
     assert np.isclose(weights[1] / weights[0], 0.5, rtol=0.05)
 
+
 def test_calculate_footprint_averages():
     """
     Test calculation of footprint for a discrete 2D dirac delta function and ensure that
@@ -209,6 +209,9 @@ def test_calculate_footprint_averages():
             "longitude": (("longitude",), lons),
         }
     )
+    data = xr.Dataset({
+        "data": data
+    })
 
     n_scans = 21
     n_pixels = 21
@@ -237,7 +240,7 @@ def test_calculate_footprint_averages():
         dims=("scans",)
     )
 
-    results, valid_frac = calculate_footprint_averages(
+    results = calculate_footprint_averages(
         data,
         longitudes,
         latitudes,
@@ -248,8 +251,40 @@ def test_calculate_footprint_averages():
         area_of_influence=2.0
     )
 
-    assert np.isclose(results[10, 5], 0.5, atol=0.01).all()
-    assert np.isclose(results[10, 10], 1.0, atol=0.01).all()
-    assert np.isclose(results[10, 15], 0.5, atol=0.01).all()
-    assert np.isclose(results[5, 10], 0.5, atol=0.01).all()
-    assert np.isclose(results[15, 10], 0.5, atol=0.01).all()
+    assert np.isclose(results["data"][10, 5], 0.5, atol=0.01).all()
+    assert np.isclose(results["data"][10, 10], 1.0, atol=0.01).all()
+    assert np.isclose(results["data"][10, 15], 0.5, atol=0.01).all()
+    assert np.isclose(results["data"][5, 10], 0.5, atol=0.01).all()
+    assert np.isclose(results["data"][15, 10], 0.5, atol=0.01).all()
+
+
+def test_interp_along_swath():
+    """
+    Test interpolation of gridded data along a variable time field.
+    """
+
+    time = np.arange(
+        np.datetime64("2020-01-01T00:00:00"),
+        np.datetime64("2020-01-01T04:00:00"),
+        np.timedelta64(1, "h")
+    )
+
+    field = np.tile(time[..., None, None], (1, 4, 4))
+    scan_time = np.tile(time[..., None], (1, 4))
+
+    dataset = xr.Dataset({
+        "time": (("time",), time),
+        "field": (("time", "latitude", "longitude"), field)
+    })
+
+    dataset_r = interp_along_swath(dataset, scan_time)
+    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time).all()
+
+    # Test out-of-bounds interpolation
+    scan_time[:] = np.datetime64("2019-12-31T00:00:00")
+    dataset_r = interp_along_swath(dataset, scan_time)
+    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time[0]).all()
+
+    scan_time[:] = np.datetime64("2020-01-31T00:00:00")
+    dataset_r = interp_along_swath(dataset, scan_time)
+    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time[-1]).all()

@@ -11,81 +11,122 @@ import pansat.environment as penv
 
 from speed.grids import GLOBAL
 from speed.data.mrms import (
-    PRECIP_CLASSES,
-    resample_scalar,
-    resample_categorical,
+    load_mrms_data,
+    downsample_mrms_data,
+    footprint_average_mrms_data,
     mrms_data
 )
 
 
-@pytest.fixture
-def mrms_precip_rate():
-    time = TimeRange("2019-01-01T00:00:00", "2019-01-01T00:00:00")
-    recs = mrms.precip_rate.get(time)
-    return recs
-
-
-@pytest.fixture
-def mrms_precip_flag():
-    time = TimeRange("2019-01-01T00:00:00", "2019-01-01T00:00:00")
-    recs = mrms.precip_flag.get(time)
-    return recs
-
-@pytest.fixture
-def mrms_granule(mrms_precip_rate):
-    index = penv.get_index(mrms.precip_rate)
-    time = TimeRange("2019-01-01T00:00:00", "2019-01-01T00:00:00")
-    return index.find(time)[0]
-
-
-def test_resample_scalar(mrms_precip_rate):
-    """
-    Test resampling of MRMS scalar data and ensure that:
-         - Resampled data has same shape as global grid.
-    """
-    rec = mrms_precip_rate[0]
-    mrms_data = mrms.precip_rate.open(rec)
-    resampled = resample_scalar(mrms_data.precip_rate)
-
-    assert resampled.latitude.shape == GLOBAL.lats.shape
-    assert resampled.longitude.shape == GLOBAL.lons.shape
-
-
-def test_resample_categorical(mrms_precip_flag):
-    """
-    Test resampling of MRMS precip type data and ensure that:
-         - Resampled data has same shape as global grid.
-         - Resampled
-    """
-    rec = mrms_precip_flag[0]
-    mrms_data = mrms.precip_flag.open(rec)
-    resampled = resample_categorical(
-        mrms_data.precip_flag,
-        PRECIP_CLASSES
-    )
-
-    assert resampled.latitude.shape == GLOBAL.lats.shape
-    assert resampled.longitude.shape == GLOBAL.lons.shape
-    labels = np.unique(resampled.data)
-    expected_labels = set([-3]).union(set(PRECIP_CLASSES.keys()))
-    for label in labels:
-        assert label in expected_labels
-
-
 def test_load_mrms_data(mrms_match):
     """
-    Test loading of MRMS data and ensure that the results dataset
-        - Contains a 'surface_precip' variable
-        - Contains a 'precip_flag' variable
-        - Contains a 'radar_quality_index' variable
+    Ensure that loading of MRMS data for a given precip rate granules fetches
+    all of the expected additional data.
+    """
+    _, mrms_granules = mrms_match
+    data = load_mrms_data(next(iter(mrms_granules)))
+
+    assert "surface_precip" in data
+    assert "radar_quality_index" in data
+    assert "precip_type" in data
+    assert "gauge_correction_factor" in data
+
+
+def test_downsample_mrms_data(mrms_match):
+    """
+    Ensure that downsampling of MRMS data produces the expected variables and that the results
+    contain some valid data.
+    """
+    _, mrms_granules = mrms_match
+    data = load_mrms_data(next(iter(mrms_granules)))
+    data_d, grid = downsample_mrms_data(data)
+
+    assert "surface_precip" in data_d
+    assert "surface_precip_nn" in data_d
+
+    assert "valid_fraction" in data_d
+    assert "rain_fraction" in data_d
+    assert "snow_fraction" in data_d
+    assert "convective_fraction" in data_d
+    assert "stratiform_fraction" in data_d
+    assert "convective_fraction" in data_d
+    assert "stratiform_fraction" in data_d
+    assert "hail_fraction" in data_d
+
+    assert (data_d["surface_precip"] >= 0.0).any()
+    assert (data_d["surface_precip_nn"] >= 0.0).any()
+    assert (data_d["valid_fraction"] > 0.0).any()
+    assert (data_d["stratiform_fraction"] > 0.0).any()
+
+
+def test_footprint_average_mrms_data(mrms_match):
+    """
+    Ensure that footprint-averaging of MRMS data produces the expected variables and that the results
+    contain some valid data.
+    """
+    input_granule, mrms_granules = mrms_match
+    data = load_mrms_data(next(iter(mrms_granules)))
+
+    input_data = input_granule.open()
+    latitudes = input_data.latitude_s1
+    longitudes = input_data.longitude_s1
+    sensor_latitudes = input_data.spacecraft_latitude
+    sensor_longitudes = input_data.spacecraft_longitude
+    sensor_altitudes = input_data.spacecraft_altitude
+    scan_time = input_data.scan_time
+
+    data_fpavg = footprint_average_mrms_data(
+        data,
+        longitudes,
+        latitudes,
+        scan_time,
+        sensor_longitudes,
+        sensor_latitudes,
+        sensor_altitudes,
+        0.98,
+        1.0
+    )
+
+    assert "surface_precip" in data_fpavg
+
+    assert "valid_fraction" in data_fpavg
+    assert "rain_fraction" in data_fpavg
+    assert "snow_fraction" in data_fpavg
+    assert "convective_fraction" in data_fpavg
+    assert "stratiform_fraction" in data_fpavg
+    assert "convective_fraction" in data_fpavg
+    assert "stratiform_fraction" in data_fpavg
+    assert "hail_fraction" in data_fpavg
+
+    assert (data_fpavg["surface_precip"] >= 0.0).any()
+    assert (data_fpavg["valid_fraction"] > 0.0).any()
+    assert (data_fpavg["stratiform_fraction"] > 0.0).any()
+
+
+def test_load_reference_data(mrms_match):
+    """
+    Ensure that loading of reference data from multiple granules works.
     """
     input_granule, mrms_granules = mrms_match
     reference_data = mrms_data.load_reference_data(
         input_granule,
         mrms_granules
     )
-
     assert "surface_precip" in reference_data
-    assert "precip_flag" in reference_data
     assert "radar_quality_index" in reference_data
-    assert "gauge_correction" in reference_data
+    assert "gauge_correction_factor" in reference_data
+
+
+def test_load_reference_data_fpavg(mrms_match):
+    """
+    Ensure that loading of footprint-average reference data from multiple granules works.
+    """
+    input_granule, mrms_granules = mrms_match
+    reference_data = mrms_data.load_reference_data_fpavg(
+        input_granule,
+        mrms_granules,
+        beam_width=0.98
+    )
+    assert "surface_precip" in reference_data
+    assert "radar_quality_index" in reference_data
+    assert "gauge_correction_factor" in reference_data
