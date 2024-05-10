@@ -13,7 +13,7 @@ import dask.array as da
 import numpy as np
 from pansat import FileRecord, TimeRange, Granule
 from pansat.products.ground_based import mrms
-from pyresample.geometry import AreaDefinition
+from pyresample.geometry import AreaDefinition, SwathDefinition
 from pansat.catalog import Index
 from scipy.signal import convolve
 import xarray as xr
@@ -23,7 +23,9 @@ from speed.grids import GLOBAL
 from speed.data.utils import (
     get_smoothing_kernel,
     extract_rect,
-    calculate_footprint_averages
+    calculate_footprint_averages,
+    resample_data,
+    interp_along_swath
 )
 
 
@@ -151,7 +153,7 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
         )
         return None
 
-    precip_1h_ro_recs = mrms.precip_1h.get(precip_1h_gc_rec.central_time)
+    precip_1h_ro_recs = mrms.precip_1h.get(precip_1h_gc_rec.temporal_coverage.end)
     parts = precip_1h_gc_rec.filename.split("_")
     parts[0] = "RadarOnly"
     ro_filename = "_".join(parts)
@@ -169,6 +171,10 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
     precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec).drop_vars(["time", "valid_time"])
     precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec).drop_vars(["time", "valid_time"])
     corr_factor_data = precip_1h_gc_data.precip_1h_gc / precip_1h_ro_data.precip_1h
+    no_precip = np.isclose(precip_1h_gc_data.precip_1h_gc.data, 0.0)
+    corr_factor_data.data[no_precip] = 1.0
+    invalid = precip_1h_gc_data.precip_1h_gc.data < 0.0
+    corr_factor_data.data[invalid] = np.nan
 
     input_files.append(precip_1h_ro_rec.filename)
     input_files.append(precip_1h_gc_rec.filename)
@@ -211,6 +217,8 @@ def downsample_mrms_data(
         np.isfinite(mrms_data["gauge_correction_factor"].data)
     )
 
+    lower_left_row = None
+    lower_left_col = None
     if grid is None:
         lons, lats = GLOBAL.grid.get_lonlats()
         lons = lons[0]
@@ -228,6 +236,8 @@ def downsample_mrms_data(
         lat_start = valid_lats.min()
         lat_end = valid_lats.max()
         grid = GLOBAL.grid[lat_start:lat_end, lon_start:lon_end]
+        lower_left_row = lat_start
+        lower_left_col = lon_start
 
     valid_fraction = smooth_field(valid_mask.astype(np.float32))
 
@@ -251,7 +261,6 @@ def downsample_mrms_data(
         (mrms_data["precip_type"].data == 3.0) +
         (mrms_data["precip_type"].data == 4.0)
     ).astype(np.float32)
-
     snow_fraction[~valid_mask] = np.nan
     snow_fraction = smooth_field(snow_fraction)
 
@@ -288,13 +297,17 @@ def downsample_mrms_data(
         "rain_fraction": (("latitude", "longitude"), rain_fraction),
         "snow_fraction": (("latitude", "longitude"), snow_fraction),
         "convective_fraction": (("latitude", "longitude"), conv_fraction),
-        "stratiform_fraction": (("latitude", "longitude"), strat_fraction), "hail_fraction": (("latitude", "longitude"), hail_fraction),
+        "stratiform_fraction": (("latitude", "longitude"), strat_fraction),
+        "hail_fraction": (("latitude", "longitude"), hail_fraction),
     })
 
     lons, lats = grid.get_lonlats()
     lons = lons[0]
     lats = lats[..., 0]
     downsampled = smoothed.interp(latitude=lats, longitude=lons, method="nearest")
+    if lower_left_col is not None:
+        downsampled.attrs["lower_left_col"] = lower_left_col
+        downsampled.attrs["lower_left_row"] = lower_left_row
     return downsampled, grid
 
 
@@ -395,8 +408,6 @@ def footprint_average_mrms_data(
             sensor_altitudes,
             beam_width,
             area_of_influence=area_of_influence,
-            sensor_time=scan_time,
-            max_time_diff=np.timedelta64(60, "s")
     )
     return data_fpavg
 
@@ -414,7 +425,10 @@ class MRMS(ReferenceData):
         super().__init__(name, mrms.MRMS_DOMAIN, mrms.precip_rate)
 
     def load_reference_data(
-        self, input_granule: Granule, granules: List[Granule]
+        self,
+        input_granule: Granule,
+        granules: List[Granule],
+        beam_width: float
     ) -> Optional[xr.Dataset]:
         """
         Load reference data for a given granule of MRMS data.
@@ -438,28 +452,122 @@ class MRMS(ReferenceData):
         input_files = []
 
         grid = None
-        data_resampled = []
+        mrms_data = []
 
-        for granule in granules:
+        input_data = input_granule.open()
+        if "latitude_s1" in input_data:
+            input_data = input_data.rename(
+                latitude_s1="latitude",
+                longitude_s1="longitude"
+            )
+        input_data = input_data[[
+            "scan_time",
+            "latitude",
+            "longitude",
+            "spacecraft_latitude",
+            "spacecraft_longitude",
+            "spacecraft_altitude"
+        ]]
+        input_data = input_data.reset_coords(names=["scan_time"])
+        lons_input = input_data.longitude.data
+        lats_input = input_data.latitude.data
 
-            mrms_data = load_mrms_data(granule)
+        for granule in list(granules):
+            mrms_data_t = load_mrms_data(granule)
+            if mrms_data_t is None:
+                continue
+            input_files += mrms_data_t.attrs["input_files"]
+            if col_start is None:
+                lons = mrms_data_t.longitude.data
+                lats = mrms_data_t.latitude.data
+                lons_input = lons_input[
+                    (lons_input >= lons.min()) *
+                    (lons_input <= lons.max())
+                ]
+                lats_input = lats_input[
+                    (lats_input >= lats.min()) *
+                    (lats_input <= lats.max())
+                ]
+                lon_min, lon_max = lons_input.min(), lons_input.max()
+                lat_min, lat_max = lats_input.min(), lats_input.max()
 
-            if col_start is not None:
-                lon_indices = np.where((mrms_data.longitude.data >= lon_min) * (mrms_data.longitude.data <= lon_max))[0]
-                lat_indices = np.where((mrms_data.latitude.data >= lat_min) * (mrms_data.latitude.data <= lat_max))[0]
+                lon_indices = np.where(
+                    (
+                        (mrms_data_t.longitude.data >= lon_min) *
+                        (mrms_data_t.longitude.data <= lon_max)
+                    )
+                )[0]
+                lat_indices = np.where(
+                    (
+                        (mrms_data_t.latitude.data >= lat_min) *
+                        (mrms_data_t.latitude.data <= lat_max)
+                    )
+                )[0]
                 row_start = lat_indices.min()
                 row_end = lat_indices.max()
                 col_start = lon_indices.min()
                 col_end = lon_indices.max()
-            mrms_data = mrms_data[{"latitude": slice(row_start, row_end), "longitude": slice(row_start, row_end)}]
 
-            input_files += mrms_data.attrs["input_files"]
-            mrms_data_r, grid = downsample_mrms_data(mrms_data, grid=grid)
-            data_resampled.append(mrms_data_r)
+            mrms_data.append(
+                mrms_data_t[{
+                    "latitude": slice(row_start, row_end),
+                    "longitude": slice(col_start, col_end),
+                }]
+            )
 
-        mrms_data = xr.concat(data_resampled, "time").sortby("time")
-        mrms_data.attrs["mrms_input_files"] = input_files
-        return mrms_data
+        if len(mrms_data) == 0:
+            LOGGER.warning(
+                "Unable to load complete MRMS data for input graule %s.",
+                input_granule
+            )
+            return None
+
+        mrms_data = xr.concat(mrms_data, "time")
+
+        lons = mrms_data.longitude.data
+        lats = mrms_data.latitude.data
+        lons, lats = np.meshgrid(lons, lats)
+
+        area = SwathDefinition(lons=lons, lats=lats)
+
+        scan_time, _ = xr.broadcast(input_data.scan_time, input_data.latitude)
+        dtype = scan_time.dtype
+        input_data["scan_time"] = scan_time.astype("int64")
+        scan_time = resample_data(input_data, area)["scan_time"].astype(dtype)
+        mrms_data = interp_along_swath(
+            mrms_data.sortby('time'),
+            scan_time,
+            dimension="time"
+        )
+        LOGGER.info(
+            "Downsampling MRMS data for input granule %s",
+            input_granule
+        )
+        mrms_data_d, _ = downsample_mrms_data(mrms_data, grid=grid)
+
+        latitudes = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
+        longitudes = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
+        sensor_latitude = input_data.spacecraft_latitude
+        sensor_longitude = input_data.spacecraft_longitude
+        sensor_altitude = input_data.spacecraft_altitude
+        LOGGER.info(
+            "Calculating footprint averages for input granule %s",
+            input_granule
+        )
+        mrms_data_fpavg = footprint_average_mrms_data(
+            mrms_data,
+            longitudes,
+            latitudes,
+            scan_time,
+            sensor_longitude,
+            sensor_latitude,
+            sensor_altitude,
+            beam_width=beam_width,
+            area_of_influence=1.0
+        )
+        mrms_data_d.attrs["mrms_input_files"] = input_files
+        return mrms_data_d, mrms_data_fpavg
+
 
     def load_reference_data_fpavg(
         self,
