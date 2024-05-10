@@ -104,6 +104,34 @@ def extract_scans(granule: Granule, dest: Path, min_scans: Optional[int] = None)
     return output_filename
 
 
+def get_useful_scan_range(
+        data: xr.Dataset,
+        reference_variable: str,
+        min_scans: int = 256,
+        margin: int = 64
+):
+    """
+    Determine scan range containing valid reference data.
+
+    Args:
+        data: A xarray.Dataset containing satellite observations in their native sampling.
+        reference_variable: The variable to use to determine scans with valid reference
+        min_scans: The minimum name of scans in the returned range.
+        margin: The number of scans by which to expand the valid scan range.
+
+    """
+    ref_data = data[reference_variable].data
+    valid_scans = np.where(np.any(np.isfinite(ref_data), -1))[0]
+    scan_start = max(valid_scans[0] - margin, 0)
+    scan_end = min(valid_scans[-1] + margin, data.scans.size)
+    n_scans = scan_end - scan_start
+    if n_scans < min_scans:
+        scan_c = int(0.5 * (scan_end + scan_start))
+        scan_start = max(scan_c - min_scans // 2, 0)
+        scan_end = min(scan_start + min_scans, surface_precip.shape[0])
+    return scan_start, scan_end
+
+
 def save_data_native(
     sensor_name: str,
     reference_data_name: str,
@@ -129,21 +157,6 @@ def save_data_native(
     output_path = Path(output_path)
     native_path = output_path / "native"
     native_path.mkdir(exist_ok=True)
-
-    # Determine number of valid reference pixels in scene.
-    surface_precip = reference_data.surface_precip.data
-
-    valid_scans = np.where(np.any(np.isfinite(surface_precip), -1))[0]
-    scan_start = valid_scans[0]
-    scan_end = valid_scans[-1]
-    n_scans = scan_end - scan_start
-    if n_scans < min_scans:
-        scan_c = int(0.5 * (scan_end + scan_start))
-        scan_start = max(scan_c - min_scans // 2, 0)
-        scan_end = min(scan_start + min_scans, surface_precip.shape[0])
-
-    preprocessor_data = preprocessor_data[{"scans": slice(scan_start, scan_end)}]
-    reference_data = reference_data[{"scans": slice(scan_start, scan_end)}]
 
     time = to_datetime(preprocessor_data.scan_time.mean().data)
     fname = time.strftime(f"{reference_data_name}_{sensor_name}_%Y%m%d%H%M%S.nc")
@@ -252,8 +265,11 @@ def save_data_gridded(
     fname = time.strftime(f"{reference_data_name}_{sensor_name}_%Y%m%d%H%M%S.nc")
 
     output_file = gridded_path / fname
-    preprocessor_data.to_netcdf(output_file, group="input_data")
-    reference_data.to_netcdf(output_file, group="reference_data", mode="a")
+
+    encoding = {var: {"zlib": True} for var in preprocessor_data}
+    preprocessor_data.to_netcdf(output_file, group="input_data", encoding=encoding)
+    encoding = {var: {"zlib": True} for var in reference_data}
+    reference_data.to_netcdf(output_file, group="reference_data", mode="a", encoding=encoding)
 
 
 def resample_data(
@@ -303,7 +319,6 @@ def resample_data(
     resampled["longitude"] = (("longitude",), lons_t[0, :])
 
     for var in dataset:
-        print("RESAMPLING :", var)
         if var in ["latitude", "longitude"]:
             continue
         data = dataset[var].data
@@ -376,10 +391,10 @@ def calculate_grid_resample_indices(dataset, target_grid):
     resampled = {}
 
     row_inds_r = kd_tree.get_sample_from_neighbour_info(
-        "nn", swath.shape, row_inds, ind_in, ind_out, inds
+        "nn", swath.shape, row_inds, ind_in, ind_out, inds, fill_value=-1
     )
     col_inds_r = kd_tree.get_sample_from_neighbour_info(
-        "nn", swath.shape, col_inds, ind_in, ind_out, inds
+        "nn", swath.shape, col_inds, ind_in, ind_out, inds, fill_value=-1
     )
 
     return xr.Dataset(
@@ -711,7 +726,7 @@ def calculate_footprint_averages(
             valid_mask = np.isfinite(data_fp[var].data)
             fp_sum = (wgts_var * np.where(valid_mask, data_fp[var].data, 0.0)).sum((0, 1))
             wgt_sum = np.where(valid_mask, wgts_var, 0.0).sum((0, 1))
-            results[var][-1][scan_ind, pix_ind] = fp_sum
+            results[var][-1][scan_ind, pix_ind] = fp_sum / wgt_sum
 
     return xr.Dataset(results)
 
@@ -747,7 +762,11 @@ def interp_along_swath(ref_data, scan_time, dimension="time"):
     )
     scan_time = scan_time.astype(ref_data.time.dtype)
     inds = np.digitize(scan_time.astype(np.int64), time_bins.astype(np.int64))
-    inds = np.minimum(np.maximum(inds - 1, 0), ref_data.time.size - 1)
-    print(inds, time_bins)
-    inds = xr.DataArray(inds, dims=(("latitude", "longitude")))
-    return ref_data[{"time": inds}]
+    out_of_range = (inds == 0) + (inds==time_bins.size)
+    inds[out_of_range] = time_bins.size // 2
+    inds = xr.DataArray(inds - 1, dims=(("latitude", "longitude")))
+
+    time = ref_data.time[{"time": inds}]
+    ref_data_r = ref_data[{"time": inds}]
+    ref_data_r["time"] = time
+    return ref_data_r

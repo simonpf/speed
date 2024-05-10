@@ -278,13 +278,15 @@ def test_interp_along_swath():
     })
 
     dataset_r = interp_along_swath(dataset, scan_time)
+    assert "time" in dataset_r
     assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time).all()
+    assert np.all(dataset_r["time"].data == dataset_r["field"].data)
 
     # Test out-of-bounds interpolation
     scan_time[:] = np.datetime64("2019-12-31T00:00:00")
     dataset_r = interp_along_swath(dataset, scan_time)
-    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time[0]).all()
+    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time[1]).all()
 
     scan_time[:] = np.datetime64("2020-01-31T00:00:00")
     dataset_r = interp_along_swath(dataset, scan_time)
-    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time[-1]).all()
+    assert (dataset_r["field"].data[..., 0].astype(time.dtype) == time[1]).all()
