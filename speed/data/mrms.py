@@ -52,7 +52,7 @@ def smooth_field(data: np.ndarray) -> np.ndarray:
     cts = np.maximum(convolve(~invalid, np.ones_like(k), mode="same"), 0.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        data_s = data_s / (cts / k.size)
+        data_s = data_s * (np.ones_like(k).sum() / cts)
     data_s[invalid] = np.nan
     return data_s
 
@@ -73,7 +73,7 @@ def resample_scalar(data: xr.DataArray) -> xr.DataArray:
         data=smooth_field(data.data),
         coords={"latitude": data.latitude, "longitude": data.longitude},
     )
-    data_g = data_s.interp(latitude=GLOBAL.lats, longitude=GLOBAL.lons)
+    data_g = data_s.interp(latitude=GLOBAL.lats, longitude=GLOBAL.lons, method="nearest")
     return data_g
 
 
@@ -171,7 +171,7 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
     precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec).drop_vars(["time", "valid_time"])
     precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec).drop_vars(["time", "valid_time"])
     corr_factor_data = precip_1h_gc_data.precip_1h_gc / precip_1h_ro_data.precip_1h
-    no_precip = np.isclose(precip_1h_gc_data.precip_1h_gc.data, 0.0)
+    no_precip = np.isclose(precip_1h_ro_data.precip_1h.data, 0.0)
     corr_factor_data.data[no_precip] = 1.0
     invalid = precip_1h_gc_data.precip_1h_gc.data < 0.0
     corr_factor_data.data[invalid] = np.nan
@@ -253,61 +253,64 @@ def downsample_mrms_data(
     radar_quality_index[~valid_mask] = np.nan
     radar_quality_index = smooth_field(radar_quality_index)
 
-    rain_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
-    rain_fraction[~valid_mask] = np.nan
-    rain_fraction = smooth_field(rain_fraction)
+    precip_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
+    precip_fraction[~valid_mask] = np.nan
+    precip_fraction = smooth_field(precip_fraction)
 
     snow_fraction = (
-        (mrms_data["precip_type"].data == 3.0) +
+        (mrms_data["precip_type"].data == 3.0) |
         (mrms_data["precip_type"].data == 4.0)
     ).astype(np.float32)
     snow_fraction[~valid_mask] = np.nan
-    snow_fraction = smooth_field(snow_fraction)
+    snow_fraction = smooth_field(snow_fraction).astype(np.float32)
 
     hail_fraction = (mrms_data["precip_type"].data == 7.0).astype(np.float32)
     hail_fraction[~valid_mask] = np.nan
-    hail_fraction = smooth_field(hail_fraction)
+    hail_fraction = smooth_field(hail_fraction).astype(np.float32)
 
     conv_fraction = (
-        (mrms_data["precip_type"].data == 6.0) +
+        (mrms_data["precip_type"].data == 6.0) |
         (mrms_data["precip_type"].data == 96.0)
     ).astype(np.float32)
     conv_fraction[~valid_mask] = np.nan
-    conv_fraction = smooth_field(conv_fraction)
+    conv_fraction = smooth_field(conv_fraction).astype(np.float32)
 
     strat_fraction = (
-        (mrms_data["precip_type"].data == 1.0) +
-        (mrms_data["precip_type"].data == 2.0) +
-        (mrms_data["precip_type"].data == 10.0) +
+        (mrms_data["precip_type"].data == 1.0) |
+        (mrms_data["precip_type"].data == 2.0) |
+        (mrms_data["precip_type"].data == 10.0) |
         (mrms_data["precip_type"].data == 91.0)
     ).astype(np.float32)
     strat_fraction[~valid_mask] = np.nan
-    strat_fraction = smooth_field(strat_fraction)
+    strat_fraction = smooth_field(strat_fraction).astype(np.float32)
 
     smoothed = xr.Dataset({
-        "latitude": (("latitude",), mrms_data.latitude.data),
-        "longitude": (("longitude",), mrms_data.longitude.data),
-        "surface_precip": (("latitude", "longitude"), surface_precip),
-        "surface_precip_nn": (("latitude", "longitude"), mrms_data.surface_precip.data),
-        "gauge_correction_factor": (("latitude", "longitude"), gauge_correction_factor),
-        "gauge_correction_factor_nn": (("latitude", "longitude"), mrms_data.gauge_correction_factor.data),
-        "radar_quality_index": (("latitude", "longitude"), radar_quality_index),
-        "radar_quality_index_nn": (("latitude", "longitude"), mrms_data.radar_quality_index.data),
-        "valid_fraction": (("latitude", "longitude"), valid_fraction),
-        "rain_fraction": (("latitude", "longitude"), rain_fraction),
-        "snow_fraction": (("latitude", "longitude"), snow_fraction),
-        "convective_fraction": (("latitude", "longitude"), conv_fraction),
-        "stratiform_fraction": (("latitude", "longitude"), strat_fraction),
-        "hail_fraction": (("latitude", "longitude"), hail_fraction),
+        "latitude": (("latitude",), mrms_data.latitude.data.astype(np.float32)),
+        "longitude": (("longitude",), mrms_data.longitude.data.astype(np.float32)),
+        "surface_precip": (("latitude", "longitude"), surface_precip.astype(np.float32)),
+        "surface_precip_nn": (("latitude", "longitude"), mrms_data.surface_precip.data.astype(np.float32)),
+        "gauge_correction_factor": (("latitude", "longitude"), gauge_correction_factor.astype(np.float32)),
+        "gauge_correction_factor_nn": (("latitude", "longitude"), mrms_data.gauge_correction_factor.data.astype(np.float32)),
+        "radar_quality_index": (("latitude", "longitude"), radar_quality_index.astype(np.float32)),
+        "radar_quality_index_nn": (("latitude", "longitude"), mrms_data.radar_quality_index.data.astype(np.float32)),
+        "valid_fraction": (("latitude", "longitude"), valid_fraction.astype(np.float32)),
+        "precip_fraction": (("latitude", "longitude"), precip_fraction.astype(np.float32)),
+        "snow_fraction": (("latitude", "longitude"), snow_fraction.astype(np.float32)),
+        "convective_fraction": (("latitude", "longitude"), conv_fraction.astype(np.float32)),
+        "stratiform_fraction": (("latitude", "longitude"), strat_fraction.astype(np.float32)),
+        "hail_fraction": (("latitude", "longitude"), hail_fraction.astype(np.float32)),
+        "time": (("latitude", "longitude"), mrms_data.time.data.astype("datetime64[ns]"))
     })
 
     lons, lats = grid.get_lonlats()
     lons = lons[0]
     lats = lats[..., 0]
+    smoothed["time"] = smoothed.time.astype(np.int64)
     downsampled = smoothed.interp(latitude=lats, longitude=lons, method="nearest")
     if lower_left_col is not None:
         downsampled.attrs["lower_left_col"] = lower_left_col
         downsampled.attrs["lower_left_row"] = lower_left_row
+    downsampled["time"] = downsampled["time"].astype("datetime64[ns]")
     return downsampled, grid
 
 
@@ -344,7 +347,6 @@ def footprint_average_mrms_data(
     """
     scan_time, _ = xr.broadcast(scan_time, latitudes)
 
-
     valid_mask = (
         (mrms_data["surface_precip"].data >= 0.0) *
         (mrms_data["precip_type"].data >= 0) *
@@ -358,8 +360,8 @@ def footprint_average_mrms_data(
     radar_quality_index = mrms_data["radar_quality_index"].data
     radar_quality_index[~valid_mask] = np.nan
 
-    rain_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
-    rain_fraction[~valid_mask] = np.nan
+    precip_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
+    precip_fraction[~valid_mask] = np.nan
 
     snow_fraction = (
         (mrms_data["precip_type"].data == 3.0) +
@@ -391,7 +393,7 @@ def footprint_average_mrms_data(
         "gauge_correction_factor": (("latitude", "longitude"), gauge_correction_factor),
         "radar_quality_index": (("latitude", "longitude"), radar_quality_index),
         "valid_fraction": (("latitude", "longitude"), valid_mask.astype(np.float32)),
-        "rain_fraction": (("latitude", "longitude"), rain_fraction),
+        "precip_fraction": (("latitude", "longitude"), precip_fraction),
         "snow_fraction": (("latitude", "longitude"), snow_fraction),
         "convective_fraction": (("latitude", "longitude"), conv_fraction),
         "stratiform_fraction": (("latitude", "longitude"), strat_fraction),

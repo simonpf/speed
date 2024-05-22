@@ -16,6 +16,7 @@ import xarray as xr
 import click
 
 import speed.logging
+from speed.data import cpcir, goes
 
 LOGGER = logging.getLogger(__file__)
 
@@ -108,21 +109,16 @@ cli.add_command(extract_data)
     type=int,
     default=256,
 )
-@click.option(
-    "--filename_pattern",
-    type=str,
-    default="collocation_{time}",
-)
-def extract_training_data_2d(
+def extract_training_data_spatial(
         collocation_path: str,
         output_folder: str,
         overlap: float = 0.0,
         size: int = 256,
-        filename_pattern: str = "collocation_{time}",
         min_input_frac: float = None
 ) -> int:
     """
-    Extract collocations for a given date.
+    Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes
+    to OUTPUT_FOLDER.
     """
     from speed.data.utils import extract_scenes
 
@@ -139,17 +135,94 @@ def extract_training_data_2d(
 
     collocation_files = sorted(list(collocation_path.glob("*.nc")))
     for collocation_file in tqdm(collocation_files):
+
+        sensor_name = collocation_file.name.split("_")[1]
         input_data = xr.load_dataset(collocation_file, group="input_data")
         reference_data = xr.load_dataset(collocation_file, group="reference_data")
-        extract_scenes(
-            input_data,
-            reference_data,
-            output_folder,
-            overlap=overlap,
-            size=size,
-            filename_pattern=filename_pattern
-        )
+
+        try:
+            extract_scenes(
+                sensor_name,
+                input_data,
+                reference_data,
+                output_folder,
+                overlap=overlap,
+                size=size,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Encountered an error when processing file %s.",
+                collocation_file
+            )
 
     return 1
 
-cli.add_command(extract_training_data_2d)
+cli.add_command(extract_training_data_spatial, name="extract_training_data_spatial")
+cli.add_command(cpcir.cli, name="extract_cpcir_obs")
+cli.add_command(goes.cli, name="extract_goes_obs")
+
+
+@click.command()
+@click.argument("collocation_path")
+@click.argument("output_folder")
+def extract_training_data_tabular(
+        collocation_path: str,
+        output_folder: str,
+) -> int:
+    """
+    Extract tabular training data from collocations in COLLOCATION_PATH and write resulting files
+    to OUTPUT_FOLDER.
+    """
+    from speed.data.utils import extract_training_data
+
+    output_folder = Path(output_folder)
+    output_folder.mkdir(exist_ok=True, parents=True)
+
+    collocation_path = Path(collocation_path)
+    if not collocation_path.exists():
+        LOGGER.error(
+            "'collocation_path' must point to an existing directory."
+        )
+        return 1
+
+
+    collocation_files = sorted(list(collocation_path.glob("*.nc")))
+    for collocation_file in tqdm(collocation_files[:50]):
+
+        sensor_name = collocation_file.name.split("_")[1]
+        input_data = xr.load_dataset(collocation_file, group="input_data")
+        reference_data = xr.load_dataset(collocation_file, group="reference_data")
+
+        inpt_data = []
+        anc_data = []
+        trgt_data = []
+
+        try:
+            inpt, anc, trgt = extract_training_data(
+                input_data,
+                reference_data,
+            )
+            inpt_data.append(inpt)
+            anc_data.append(anc)
+            trgt_data.append(trgt)
+
+        except Exception:
+            LOGGER.exception(
+                "Encountered an error when processing file %s.",
+                collocation_file
+            )
+
+    input_data = xr.concat(inpt_data, dim="samples")
+    ancillary_data = xr.concat(anc_data, dim="samples")
+    target_data = xr.concat(trgt_data, dim="samples")
+
+    input_data.to_netcdf(output_folder / "pmw.nc")
+    ancillary_data.to_netcdf(output_folder / "ancillary.nc")
+    target_data.to_netcdf(output_folder / "target.nc")
+
+    return 0
+
+cli.add_command(extract_training_data_spatial, name="extract_training_data_spatial")
+cli.add_command(extract_training_data_tabular, name="extract_training_data_tabular")
+cli.add_command(cpcir.cli, name="extract_cpcir_obs")
+cli.add_command(goes.cli, name="extract_goes_obs")

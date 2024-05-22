@@ -4,6 +4,7 @@ speed.data.utils
 
 Utility functions for data processing.
 """
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -40,6 +41,28 @@ def get_smoothing_kernel(fwhm: float, grid_resolution: float) -> np.ndarray:
     k /= k.sum()
 
     return k
+
+
+def round_time(time: np.datetime64, step: np.timedelta64) -> np.datetime64:
+    """
+    Round time to given time step.
+
+    Args:
+        time: A numpy.datetime64 object representing the time to round.
+        step: A numpy.timedelta64 object representing the time step to
+            which to round the results.
+    """
+    if isinstance(time, datetime):
+        time = to_datetime64(time)
+    if isinstance(step, timedelta):
+        step = to_timedelta64(step)
+    time = time.astype("datetime64[s]")
+    step = step.astype("timedelta64[s]")
+    rounded = (
+        np.datetime64(0, "s")
+        + time.astype(np.int64) // step.astype(np.int64) * step
+    )
+    return rounded
 
 
 def extract_rect(
@@ -128,7 +151,7 @@ def get_useful_scan_range(
     if n_scans < min_scans:
         scan_c = int(0.5 * (scan_end + scan_start))
         scan_start = max(scan_c - min_scans // 2, 0)
-        scan_end = min(scan_start + min_scans, surface_precip.shape[0])
+        scan_end = min(scan_start + min_scans, ref_data.shape[0])
     return scan_start, scan_end
 
 
@@ -292,6 +315,7 @@ def resample_data(
     """
     lons = dataset.longitude.data
     lats = dataset.latitude.data
+
     if isinstance(target_grid, tuple):
         lons_t, lats_t = target_grid
         shape = lons_t.shape
@@ -305,6 +329,9 @@ def resample_data(
         * (lats_t >= lats.min())
         * (lats_t <= lats.max())
     )
+
+    if lons.shape != lats.shape:
+        lons, lats = np.meshgrid(lons, lats)
 
     swath = SwathDefinition(lons=lons, lats=lats)
     target = SwathDefinition(lons=lons_t[valid_pixels], lats=lats_t[valid_pixels])
@@ -334,6 +361,7 @@ def resample_data(
             fill_value = -1
         else:
             fill_value = np.nan
+
 
         data_r = kd_tree.get_sample_from_neighbour_info(
             "nn", target.shape, data, ind_in, ind_out, inds, fill_value=fill_value
@@ -459,34 +487,146 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
     )
 
 
+ANCILLARY_VARIABLES = [
+    "wet_bulb_temperature",
+    "two_meter_temperature",
+    "lapse_rate",
+    "total_column_water_vapor",
+    "surface_temperature",
+    "moisture_convergence",
+    "leaf_area_index",
+    "snow_depth",
+    "orographic_wind",
+    "10m_wind",
+    "mountain_type",
+    "land_fraction",
+    "ice_fraction",
+    "quality_flag",
+    "sunglint_angle",
+    "airlifting_index"
+]
+
+def save_ancillary_data(
+        input_data: xr.Dataset,
+        time: datetime,
+        path: Path
+) -> None:
+    """
+    Save ancillary data in separate folder.
+
+    Args:
+        input_data: A xarray.Dataset containing all retrieval input data
+            for a single training scene.
+        time: The median time of the scene.
+        path: The base folder in which to store the extracted training
+            scenes.
+    """
+    date_str = time.strftime("%Y%m%d%H%M%S")
+    filename = f"ancillary_{date_str}.nc"
+
+    output_path = path / "ancillary"
+    output_path.mkdir(exist_ok=True)
+
+    ancillary_data = input_data[ANCILLARY_VARIABLES]
+    ancillary_data.to_netcdf(output_path / filename)
+
+
+def save_input_data(
+        sensor_name: str,
+        input_data: xr.Dataset,
+        time: datetime,
+        path: Path
+) -> None:
+    """
+    Save input data in separate folder.
+
+    Args:
+        input_data: A xarray.Dataset containing all retrieval input data
+            for a single training scene.
+        time: The median time of the scene.
+        path: The base folder in which to store the extracted training
+            scenes.
+    """
+    date_str = time.strftime("%Y%m%d%H%M%S")
+    filename = f"{sensor_name}_{date_str}.nc"
+
+    output_path = path / sensor_name
+    output_path.mkdir(exist_ok=True)
+
+    input_data = input_data[["tbs_mw", "earth_incidence_angle"]].rename({
+        "tbs_mw": "brightness_temperature"
+    })
+    input_data.to_netcdf(output_path / filename)
+
+
+TARGET_VARIABLES = [
+    "surface_precip",
+    "radar_quality_index",
+    "valid_fraction",
+    "precip_fraction",
+    "snow_fraction",
+    "hail_fraction",
+    "convective_fraction",
+    "stratiform_fraction"
+]
+
+
+def save_target_data(
+        input_data: xr.Dataset,
+        time: datetime,
+        path: Path
+) -> None:
+    """
+    Save input data in separate folder.
+
+    Args:
+        input_data: A xarray.Dataset containing all retrieval input data
+            for a single training scene.
+        time: The median time of the scene.
+        path: The base folder in which to store the extracted training
+            scenes.
+    """
+    date_str = time.strftime("%Y%m%d%H%M%S")
+    filename = f"target_{date_str}.nc"
+
+    output_path = path / "target"
+    output_path.mkdir(exist_ok=True)
+
+    target_data = input_data[TARGET_VARIABLES]
+    target_data.to_netcdf(output_path / filename)
+
+
+
+
 def extract_scenes(
+        sensor_name: str,
         input_data: xr.Dataset,
         reference_data: xr.Dataset,
         output_folder: Path,
         size: int = 256,
         overlap: float = 0.0,
-        filename_pattern = "collocation_{time}",
-        min_input_frac: Optional[float] = None
+        min_valid_input_frac: float = 0.75,
+        min_valid_ref_frac: float = 0.25
 ):
     """
     Extract scenes of a given size from collocations.
 
     Args:
+        sensor_name: The name of the sensor for which the training data
+            is extracted.
         input_data: An xarray.Dataset containing the retrievl input data.
         reference_data: An xarray.Dataset containing the correpsonding reference data.
         output_folder: The folder to which to write the extracted scenes.
         size: The size of the scenes.
         overlap: The maximum overlap in any direction between two scenes.
     """
-
     spatial_dims = input_data.tbs_mw.dims[:2]
+    n_rows = input_data[spatial_dims[0]].size
+    n_cols = input_data[spatial_dims[1]].size
 
     valid_input = np.any(np.isfinite(input_data.tbs_mw.data), -1)
     valid_output = np.isfinite(reference_data.surface_precip.data)
     valid = valid_input * valid_output
-
-    n_rows = input_data[spatial_dims[0]].size
-    n_cols = input_data[spatial_dims[1]].size
 
     row_inds, col_inds = np.where(valid)
     within = (
@@ -496,7 +636,11 @@ def extract_scenes(
     row_inds = row_inds[within]
     col_inds = col_inds[within]
 
-    while len(row_inds) > 0:
+    max_retries = 100
+    curr_try = 0
+    n_inds = len(row_inds)
+
+    while curr_try < max_retries and len(row_inds) > 0:
 
         ind = np.random.randint(len(row_inds))
         c_row = row_inds[ind]
@@ -506,36 +650,180 @@ def extract_scenes(
         row_end = c_row + size // 2
         col_start = c_col - size // 2
         col_end = c_col + size // 2
-
         slices = [slice(row_start, row_end), slice(col_start, col_end)]
 
         inpt = input_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
         ref = reference_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
 
+        valid_input_frac = valid_input[slices[0], slices[1]].mean()
+        if valid_input_frac < min_valid_input_frac:
+            row_inds = np.concatenate([row_inds[:ind], row_inds[ind + 1:]])
+            col_inds = np.concatenate([col_inds[:ind], col_inds[ind + 1:]])
+            continue
+        valid_ref_frac = valid_input[slices[0], slices[1]].mean()
+        if valid_ref_frac < min_valid_ref_frac:
+            row_inds = np.concatenate([row_inds[:ind], row_inds[ind + 1:]])
+            col_inds = np.concatenate([col_inds[:ind], col_inds[ind + 1:]])
+            continue
+
+        inpt.attrs["lower_left_col"] += col_start
+        inpt.attrs["lower_left_row"] += row_start
+        ref.attrs["lower_left_col"] += col_start
+        ref.attrs["lower_left_row"] += row_start
+
         scan_times = inpt.scan_time.data
         scan_times = scan_times[np.isfinite(scan_times)]
         time = scan_times[0] + np.median(scan_times - scan_times[0])
         time = to_datetime(time)
-        if filename_pattern.endswith(".nc"):
-            filename_pattern = filename_pattern[:-3]
-        filename = filename_pattern.format(time=time.strftime("%Y%m%d%H%M%S")) + ".nc"
 
-        ref = ref.drop_vars(["latitude", "longitude"])
-        dataset = xr.merge([inpt, ref])
-        dataset.to_netcdf(output_folder / filename)
+        save_ancillary_data(inpt, time, output_folder)
+        save_input_data(sensor_name, inpt, time, output_folder)
+        save_target_data(ref, time, output_folder)
 
-        margin = max((1.0 - 0.0) * size, 1)
+        margin = max((1.0 - overlap) * size, 1)
         covered = (
             (row_inds >= c_row - margin) * (row_inds <= c_row + margin) *
             (col_inds >= c_col - margin) * (col_inds <= c_col + margin)
         )
-
         n_inds = len(row_inds)
-
         row_inds = row_inds[~covered]
         col_inds = col_inds[~covered]
+        if n_inds == len(row_inds):
+            curr_try += 1
+        else:
+            curr_try = 0
 
-        assert n_inds > len(row_inds)
+
+def extract_training_data(
+        input_data: xr.Dataset,
+        reference_data: xr.Dataset,
+):
+    """
+    Extract tabular training data from collocation.
+
+    Args:
+        input_data: An xarray.Dataset containing the retrievl input data.
+        reference_data: An xarray.Dataset containing the correpsonding reference data.
+
+    Return:
+        A tuple ``(input_data, ancillary_data, target_data)`` containing the input, ancillary
+        and target data for the retrieval.
+    """
+    valid_input = np.any(np.isfinite(input_data.tbs_mw.data), -1)
+    valid_output = np.isfinite(reference_data.surface_precip.data)
+    valid = valid_input * valid_output
+
+    ancillary_data = xr.Dataset({
+        name: (("samples",), input_data[name].data[valid])
+        for name in ANCILLARY_VARIABLES
+    })
+
+    lats = input_data["latitude"]
+    lons = input_data["longitude"]
+    if lons.ndim < 2:
+        lats, _ = xr.broadcast(lats, reference_data["surface_precip"])
+        lons, _ = xr.broadcast(lons, reference_data["surface_precip"])
+        lats = lats.transpose("latitude", "longitude")
+        lons = lons.transpose("latitude", "longitude")
+
+    ancillary_data["latitude"] = (("samples",), lats.data[valid])
+    ancillary_data["longitude"] = (("samples",), lons.data[valid])
+
+    input_data = xr.Dataset({
+        name: (("samples", "channels"), input_data[name].data[valid])
+        for name in ["tbs_mw_gprof", "earth_incidence_angle"]
+    }).rename(tbs_mw_gprof="brightness_temperature")
+
+    target_names = [
+        "surface_precip",
+        "valid_fraction",
+        "precip_fraction",
+        "snow_fraction",
+        "hail_fraction",
+        "convective_fraction",
+        "stratiform_fraction",
+    ]
+
+    target_data = xr.Dataset({
+        name: (("samples",), reference_data[name].data[valid])
+        for name in [
+                "surface_precip",
+                "valid_fraction",
+                "precip_fraction",
+                "snow_fraction",
+                "hail_fraction",
+                "convective_fraction",
+                "stratiform_fraction",
+        ]
+    })
+    return input_data, ancillary_data, target_data
+    if ["surface_precip_fpavg"] in reference_data:
+        target
+
+    row_inds, col_inds = np.where(valid)
+    within = (
+        (row_inds >= size // 2) * (row_inds < n_rows - size // 2) *
+        (col_inds >= size // 2) * (col_inds < n_cols - size // 2)
+    )
+    row_inds = row_inds[within]
+    col_inds = col_inds[within]
+
+    max_retries = 100
+    curr_try = 0
+    n_inds = len(row_inds)
+
+    while curr_try < max_retries and len(row_inds) > 0:
+
+        ind = np.random.randint(len(row_inds))
+        c_row = row_inds[ind]
+        c_col = col_inds[ind]
+
+        row_start = c_row - size // 2
+        row_end = c_row + size // 2
+        col_start = c_col - size // 2
+        col_end = c_col + size // 2
+        slices = [slice(row_start, row_end), slice(col_start, col_end)]
+
+        inpt = input_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
+        ref = reference_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
+
+        valid_input_frac = valid_input[slices[0], slices[1]].mean()
+        if valid_input_frac < min_valid_input_frac:
+            row_inds = np.concatenate([row_inds[:ind], row_inds[ind + 1:]])
+            col_inds = np.concatenate([col_inds[:ind], col_inds[ind + 1:]])
+            continue
+        valid_ref_frac = valid_input[slices[0], slices[1]].mean()
+        if valid_ref_frac < min_valid_ref_frac:
+            row_inds = np.concatenate([row_inds[:ind], row_inds[ind + 1:]])
+            col_inds = np.concatenate([col_inds[:ind], col_inds[ind + 1:]])
+            continue
+
+        inpt.attrs["lower_left_col"] += col_start
+        inpt.attrs["lower_left_row"] += row_start
+        ref.attrs["lower_left_col"] += col_start
+        ref.attrs["lower_left_row"] += row_start
+
+        scan_times = inpt.scan_time.data
+        scan_times = scan_times[np.isfinite(scan_times)]
+        time = scan_times[0] + np.median(scan_times - scan_times[0])
+        time = to_datetime(time)
+
+        save_ancillary_data(inpt, time, output_folder)
+        save_input_data(sensor_name, inpt, time, output_folder)
+        save_target_data(ref, time, output_folder)
+
+        margin = max((1.0 - overlap) * size, 1)
+        covered = (
+            (row_inds >= c_row - margin) * (row_inds <= c_row + margin) *
+            (col_inds >= c_col - margin) * (col_inds <= c_col + margin)
+        )
+        n_inds = len(row_inds)
+        row_inds = row_inds[~covered]
+        col_inds = col_inds[~covered]
+        if n_inds == len(row_inds):
+            curr_try += 1
+        else:
+            curr_try = 0
 
 
 def lla_to_ecef(
@@ -768,5 +1056,9 @@ def interp_along_swath(ref_data, scan_time, dimension="time"):
 
     time = ref_data.time[{"time": inds}]
     ref_data_r = ref_data[{"time": inds}]
+
     ref_data_r["time"] = time
+    invalid_time = np.isnan(scan_time.data)
+    ref_data_r["time"].data[invalid_time] = np.datetime64("NaT")
+
     return ref_data_r

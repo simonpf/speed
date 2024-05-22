@@ -2,7 +2,7 @@
 speed.data.gpm
 ==============
 
-This module contains the code to process GPM L1C data into SPREE collocations.
+This module contains the code to process GPM L1C data into SPEED collocations.
 """
 from datetime import datetime, timedelta
 import logging
@@ -46,6 +46,7 @@ from speed.data.utils import (
     calculate_swath_resample_indices,
     resample_data,
     extract_rect,
+    get_useful_scan_range,
 )
 from speed.data.reference import ReferenceData
 from speed.data.input import InputData
@@ -82,7 +83,8 @@ def run_preprocessor(gpm_granule: Granule) -> xr.Dataset:
 
     preprocessor_data = preprocessor_data.rename({
         "channels": "channels_gprof",
-        "brightness_temperatures": "tbs_mw_gprof"
+        "brightness_temperatures": "tbs_mw_gprof",
+        "earth_incidence_angle": "earth_incidence_angle_gprof"
     })
     invalid = preprocessor_data.tbs_mw_gprof.data < 0
     preprocessor_data.tbs_mw_gprof.data[invalid] = np.nan
@@ -123,11 +125,22 @@ def load_l1c_brightness_temperatures(
             source,
             l1c_data.tbs.data,
             target,
-            radius_of_influence=radius_of_influence
+            radius_of_influence=radius_of_influence,
+            fill_value=np.nan
         )
-        return tbs
+        eia = kd_tree.resample_nearest(
+            source,
+            l1c_data.incidence_angle.data,
+            target,
+            radius_of_influence=radius_of_influence,
+            fill_value=np.nan
+        )
+        if eia.ndim < tbs.ndim:
+            eia = np.broadcast_to(eia[..., None], tbs.shape)
+        return tbs, eia
 
     tbs = []
+    eia = []
     swath = 1
     while f"latitude_s{swath}" in l1c_data.variables:
         lats = l1c_data[f"latitude_s{swath}"].data
@@ -140,15 +153,27 @@ def load_l1c_brightness_temperatures(
                 source,
                 l1c_data[f"tbs_s{swath}"].data,
                 target,
-                radius_of_influence=radius_of_influence
+                radius_of_influence=radius_of_influence,
+                fill_value=np.nan
             )
         )
+        eia_s = kd_tree.resample_nearest(
+            source,
+            l1c_data[f"incidence_angle_s{swath}"].data,
+            target,
+            radius_of_influence=radius_of_influence,
+            fill_value=np.nan
+        )
+        if eia_s.ndim < tbs[-1].ndim:
+            eia_s = np.broadcast_to(eia_s[..., None], tbs[-1].shape)
+        eia.append(eia_s)
         swath += 1
 
     tbs = np.concatenate(tbs, axis=-1)
+    eia = np.concatenate(eia, axis=-1)
     invalid = tbs < 0
     tbs[invalid] = np.nan
-    return tbs
+    return tbs, eia
 
 
 class GPMInput(InputData):
@@ -228,17 +253,24 @@ class GPMInput(InputData):
             return None
 
         preprocessor_data = run_preprocessor(inpt_granule)
-        tbs_mw = load_l1c_brightness_temperatures(
+        preprocessor_data.attrs.pop("frequencies")
+
+        tbs_mw, eia_mw = load_l1c_brightness_temperatures(
             inpt_granule,
             preprocessor_data,
             self.radius_of_influence
         )
         preprocessor_data["tbs_mw"] = (("scans", "pixels", "channels"), tbs_mw.data)
+        preprocessor_data["earth_incidence_angle"] = (("scans", "pixels", "channels"), eia_mw.data)
         preprocessor_data["tbs_mw"].attrs.update(self.characteristics["channels"])
         preprocessor_data["tbs_mw_gprof"].attrs.update(self.characteristics["channels_gprof"])
 
         # Load and combine reference data for all matche granules
-        ref_data = reference_data.load_reference_data(inpt_granule, ref_granules)
+        ref_data, ref_data_fpavg = reference_data.load_reference_data(
+            inpt_granule,
+            ref_granules,
+            beam_width=0.98
+        )
         if ref_data is None:
             LOGGER.info(
                 "No reference data for %s.",
@@ -246,15 +278,33 @@ class GPMInput(InputData):
             )
             return None
 
+
         reference_data_r = ref_data.interp(
             latitude=preprocessor_data.latitude,
             longitude=preprocessor_data.longitude,
             method="nearest",
         )
-        reference_data_fpavg = ref_data.load_reference_data_fpavg(inpt_granule, ref_granules)
-        for var in reference_data_fpavg:
+        reference_data_r["time"] = ref_data.time.astype(np.int64).interp(
+            latitude=preprocessor_data.latitude,
+            longitude=preprocessor_data.longitude,
+            method="nearest"
+        ).astype("datetime64[ns]")
+
+        for var in ref_data_fpavg:
             if var in reference_data_r:
-                reference_data_r[var + "_fpavg"] = reference_data_fpavg[var]
+                reference_data_r[var + "_fpavg"] = ref_data_fpavg[var]
+
+        # Limit scans to scans with useful data.
+        scan_start, scan_end = get_useful_scan_range(
+            reference_data_r,
+            "surface_precip",
+            min_scans=256,
+            margin=64
+        )
+        preprocessor_data = preprocessor_data[{"scans": slice(scan_start, scan_end)}]
+        reference_data_r = reference_data_r[{"scans": slice(scan_start, scan_end)}]
+        preprocessor_data.attrs["scan_start"] = inpt_granule.primary_index_range[0] + scan_start
+        preprocessor_data.attrs["scan_end"] = inpt_granule.primary_index_range[0] + scan_end
 
         row_start = ref_data.attrs.get("lower_left_row", 0)
         n_rows = ref_data.latitude.size
@@ -310,11 +360,6 @@ class GPMInput(InputData):
         )
         ref_data["scan_index"] = indices.scan_index
         ref_data["pixel_index"] = indices.pixel_index
-
-        if "time" in ref_data:
-            scan_time = preprocessor_data_r.scan_time
-            scan_time = scan_time.fillna(value=scan_time.min())
-            ref_data = interp_along_swath(ref_data, scan_time, dimension="time")
 
         LOGGER.info(
             "Saving file in gridded format to %s.",
