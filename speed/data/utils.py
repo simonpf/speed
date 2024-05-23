@@ -179,7 +179,7 @@ def save_data_native(
     """
     output_path = Path(output_path)
     native_path = output_path / "native"
-    native_path.mkdir(exist_ok=True)
+    native_path.mkdir(exist_ok=True, parents=True)
 
     time = to_datetime(preprocessor_data.scan_time.mean().data)
     fname = time.strftime(f"{reference_data_name}_{sensor_name}_%Y%m%d%H%M%S.nc")
@@ -230,7 +230,7 @@ def save_data_gridded(
 
     output_path = Path(output_path)
     gridded_path = output_path / "gridded"
-    gridded_path.mkdir(exist_ok=True)
+    gridded_path.mkdir(exist_ok=True, parents=True)
 
     if reference_data.longitude[0] < -179 and reference_data.longitude[-1] > 179:
 
@@ -532,7 +532,6 @@ def save_ancillary_data(
 
 
 def save_input_data(
-        sensor_name: str,
         input_data: xr.Dataset,
         time: datetime,
         path: Path
@@ -548,13 +547,13 @@ def save_input_data(
             scenes.
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
-    filename = f"{sensor_name}_{date_str}.nc"
+    filename = f"pmw_{date_str}.nc"
 
-    output_path = path / sensor_name
+    output_path = path / "pmw"
     output_path.mkdir(exist_ok=True)
 
     input_data = input_data[["tbs_mw", "earth_incidence_angle"]].rename({
-        "tbs_mw": "brightness_temperature"
+        "tbs_mw": "observations"
     })
     input_data.to_netcdf(output_path / filename)
 
@@ -677,7 +676,7 @@ def extract_scenes(
         time = to_datetime(time)
 
         save_ancillary_data(inpt, time, output_folder)
-        save_input_data(sensor_name, inpt, time, output_folder)
+        save_input_data(inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
 
         margin = max((1.0 - overlap) * size, 1)
@@ -731,8 +730,8 @@ def extract_training_data(
 
     input_data = xr.Dataset({
         name: (("samples", "channels"), input_data[name].data[valid])
-        for name in ["tbs_mw_gprof", "earth_incidence_angle"]
-    }).rename(tbs_mw_gprof="brightness_temperature")
+        for name in ["tbs_mw", "earth_incidence_angle"]
+    }).rename(tbs_mw="observations")
 
     target_names = [
         "surface_precip",
@@ -757,73 +756,6 @@ def extract_training_data(
         ]
     })
     return input_data, ancillary_data, target_data
-    if ["surface_precip_fpavg"] in reference_data:
-        target
-
-    row_inds, col_inds = np.where(valid)
-    within = (
-        (row_inds >= size // 2) * (row_inds < n_rows - size // 2) *
-        (col_inds >= size // 2) * (col_inds < n_cols - size // 2)
-    )
-    row_inds = row_inds[within]
-    col_inds = col_inds[within]
-
-    max_retries = 100
-    curr_try = 0
-    n_inds = len(row_inds)
-
-    while curr_try < max_retries and len(row_inds) > 0:
-
-        ind = np.random.randint(len(row_inds))
-        c_row = row_inds[ind]
-        c_col = col_inds[ind]
-
-        row_start = c_row - size // 2
-        row_end = c_row + size // 2
-        col_start = c_col - size // 2
-        col_end = c_col + size // 2
-        slices = [slice(row_start, row_end), slice(col_start, col_end)]
-
-        inpt = input_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
-        ref = reference_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
-
-        valid_input_frac = valid_input[slices[0], slices[1]].mean()
-        if valid_input_frac < min_valid_input_frac:
-            row_inds = np.concatenate([row_inds[:ind], row_inds[ind + 1:]])
-            col_inds = np.concatenate([col_inds[:ind], col_inds[ind + 1:]])
-            continue
-        valid_ref_frac = valid_input[slices[0], slices[1]].mean()
-        if valid_ref_frac < min_valid_ref_frac:
-            row_inds = np.concatenate([row_inds[:ind], row_inds[ind + 1:]])
-            col_inds = np.concatenate([col_inds[:ind], col_inds[ind + 1:]])
-            continue
-
-        inpt.attrs["lower_left_col"] += col_start
-        inpt.attrs["lower_left_row"] += row_start
-        ref.attrs["lower_left_col"] += col_start
-        ref.attrs["lower_left_row"] += row_start
-
-        scan_times = inpt.scan_time.data
-        scan_times = scan_times[np.isfinite(scan_times)]
-        time = scan_times[0] + np.median(scan_times - scan_times[0])
-        time = to_datetime(time)
-
-        save_ancillary_data(inpt, time, output_folder)
-        save_input_data(sensor_name, inpt, time, output_folder)
-        save_target_data(ref, time, output_folder)
-
-        margin = max((1.0 - overlap) * size, 1)
-        covered = (
-            (row_inds >= c_row - margin) * (row_inds <= c_row + margin) *
-            (col_inds >= c_col - margin) * (col_inds <= c_col + margin)
-        )
-        n_inds = len(row_inds)
-        row_inds = row_inds[~covered]
-        col_inds = col_inds[~covered]
-        if n_inds == len(row_inds):
-            curr_try += 1
-        else:
-            curr_try = 0
 
 
 def lla_to_ecef(
