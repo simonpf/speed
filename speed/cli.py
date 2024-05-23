@@ -216,9 +216,12 @@ def extract_training_data_tabular(
     ancillary_data = xr.concat(anc_data, dim="samples")
     target_data = xr.concat(trgt_data, dim="samples")
 
-    input_data.to_netcdf(output_folder / "pmw.nc")
-    ancillary_data.to_netcdf(output_folder / "ancillary.nc")
-    target_data.to_netcdf(output_folder / "target.nc")
+    (output_folder / "pmw").mkdir(exist_ok=True)
+    input_data.to_netcdf(output_folder / "pmw" / "pmw.nc")
+    (output_folder / "ancillary").mkdir(exist_ok=True)
+    ancillary_data.to_netcdf(output_folder / "ancillary" / "ancillary.nc")
+    (output_folder / "target").mkdir(exist_ok=True)
+    target_data.to_netcdf(output_folder / "target" / "target.nc")
 
     return 0
 
