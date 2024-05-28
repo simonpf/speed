@@ -157,6 +157,12 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
     parts = precip_1h_gc_rec.filename.split("_")
     parts[0] = "RadarOnly"
     ro_filename = "_".join(parts)
+    ro_filename = (
+        precip_1h_gc_rec.filename
+        .replace("MultiSensor", "RadarOnly")
+        .replace("GaugeCorr", "RadarOnly")
+        .replace("_Pass2", "")
+    )
     precip_1h_ro_rec = [
         rec for rec in precip_1h_ro_recs if rec.filename == ro_filename
     ]
@@ -168,8 +174,8 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
         )
         return None
     precip_1h_ro_rec = precip_1h_ro_rec[0].get()
-    precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec).drop_vars(["time", "valid_time"])
-    precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec).drop_vars(["time", "valid_time"])
+    precip_1h_ro_data = mrms.precip_1h.open(precip_1h_ro_rec).drop_vars(["time", "valid_time"], errors="ignore")
+    precip_1h_gc_data = mrms.precip_1h_gc.open(precip_1h_gc_rec).drop_vars(["time", "valid_time"], errors="ignore")
     corr_factor_data = precip_1h_gc_data.precip_1h_gc / precip_1h_ro_data.precip_1h
     no_precip = np.isclose(precip_1h_ro_data.precip_1h.data, 0.0)
     corr_factor_data.data[no_precip] = 1.0
