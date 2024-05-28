@@ -108,7 +108,7 @@ def test_load_reference_data(mrms_match):
     Ensure that loading of reference data from multiple granules works.
     """
     input_granule, mrms_granules = mrms_match
-    reference_data = mrms_data.load_reference_data(
+    reference_data, reference_data_fpavg = mrms_data.load_reference_data(
         input_granule,
         mrms_granules
     )
@@ -116,17 +116,6 @@ def test_load_reference_data(mrms_match):
     assert "radar_quality_index" in reference_data
     assert "gauge_correction_factor" in reference_data
 
-
-def test_load_reference_data_fpavg(mrms_match):
-    """
-    Ensure that loading of footprint-average reference data from multiple granules works.
-    """
-    input_granule, mrms_granules = mrms_match
-    reference_data = mrms_data.load_reference_data_fpavg(
-        input_granule,
-        mrms_granules,
-        beam_width=0.98
-    )
-    assert "surface_precip" in reference_data
-    assert "radar_quality_index" in reference_data
-    assert "gauge_correction_factor" in reference_data
+    assert "surface_precip" in reference_data_fpavg
+    assert "radar_quality_index" in reference_data_fpavg
+    assert "gauge_correction_factor" in reference_data_fpavg

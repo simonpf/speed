@@ -118,16 +118,22 @@ class GPMGV(ReferenceData):
         super().__init__(name, gpm_gv.MRMS_DOMAIN, self.products[0])
 
     def load_reference_data(
-        self, input_granule: Granule, granules: List[Granule]
+        self,
+        input_granule: Granule,
+        granules: List[Granule],
+        beam_width: float
     ) -> Optional[xr.Dataset]:
         """
         Load reference data for a given granule of MRMS data.
 
         Args:
-            granule: A granule object specifying the data to load.
+            input_granule: The granule of the input observations.
+            granules: A list containing the matched reference data granules
+            beam_width: The beam width to assume for calculating footprint
+                averages.
 
         Return:
-            An xarray.Dataset containing the MRMS reference data.
+            An xarray.Dataset containing the GPM GV reference data.
         """
         coords = input_granule.geometry.bounding_box_corners
         lon_min, lat_min, lon_max, lat_max = coords
@@ -150,7 +156,14 @@ class GPMGV(ReferenceData):
                 latitude_s1="latitude",
                 longitude_s1="longitude"
             )
-        input_data = input_data[["scan_time", "latitude", "longitude"]]
+        input_data = input_data[[
+            "scan_time",
+            "latitude",
+            "longitude",
+            "spacecraft_latitude",
+            "spacecraft_longitude",
+            "spacecraft_altitude",
+        ]]
         input_data = input_data.reset_coords(names=["scan_time"])
         lons_input = input_data.longitude.data
         lats_input = input_data.latitude.data
@@ -196,6 +209,13 @@ class GPMGV(ReferenceData):
                 }]
             )
 
+        if len(gv_data) == 0:
+            LOGGER.warning(
+                "Unable to load complete GPM GV data for input graule %s.",
+                input_granule
+            )
+            return None
+
         gv_data = xr.concat(gv_data, "time")
 
         lons = gv_data.longitude.data
@@ -208,79 +228,31 @@ class GPMGV(ReferenceData):
         dtype = scan_time.dtype
         input_data["scan_time"] = scan_time.astype("int64")
         scan_time = resample_data(input_data, area)["scan_time"].astype(dtype)
-        gv_data = interp_along_swath(gv_data, scan_time, dimension="time")
+        gv_data = interp_along_swath(gv_data.sortby("time"), scan_time, dimension="time")
+        gv_data_d, _ = downsample_mrms_data(gv_data, grid=grid)
 
-        gv_data, _ = downsample_mrms_data(gv_data, grid=grid)
-        gv_data.attrs["gv_input_files"] = input_files
-        return gv_data
-
-    def load_reference_data_fpavg(
-        self,
-        input_granule: Granule,
-        granules: List[Granule],
-        beam_width: float
-    ):
-
-        input_data = input_granule.open()
         latitudes = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
         longitudes = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
         sensor_latitude = input_data.spacecraft_latitude
         sensor_longitude = input_data.spacecraft_longitude
         sensor_altitude = input_data.spacecraft_altitude
-        scan_time = input_data.scan_time
-
-        coords = input_granule.geometry.bounding_box_corners
-        lon_min, lat_min, lon_max, lat_max = coords
-
-        ref_data = []
-
-        col_start = None
-        col_end = None
-        row_start = None
-        row_end = None
-
-        input_files = []
-
-        data_combined = None
-
-        for granule in granules:
-
-            gv_data = load_gv_data(granule, self.products)
-
-            if col_start is None:
-                lon_indices = np.where((gv_data.longitude.data >= lon_min) * (gv_data.longitude.data <= lon_max))[0]
-                lat_indices = np.where((gv_data.latitude.data >= lat_min) * (gv_data.latitude.data <= lat_max))[0]
-                row_start = lat_indices.min()
-                row_end = lat_indices.max()
-                col_start = lon_indices.min()
-                col_end = lon_indices.max()
-
-            gv_data = gv_data[{
-                "latitude": slice(row_start, row_end),
-                "longitude": slice(row_start, row_end)
-            }]
-            input_files += gv_data.attrs["input_files"]
-            gv_data_r = footprint_average_mrms_data(
-                gv_data,
-                longitudes,
-                latitudes,
-                scan_time,
-                sensor_longitude,
-                sensor_latitude,
-                sensor_altitude,
-                beam_width=beam_width,
-                area_of_influence=1.0
-            )
-            if data_combined is None:
-                data_combined = gv_data_r
-            else:
-                for var in data_combined:
-                    mask = np.isfinite(gv_data_r[var].data)
-                    data_combined[var].data[mask] = gv_data_r[var].data[mask]
-
-        return data_combined
-
-
+        LOGGER.info(
+            "Calculating footprint averages for input granule %s",
+            input_granule
+        )
+        gv_data_fpavg = footprint_average_mrms_data(
+            gv_data,
+            longitudes,
+            latitudes,
+            scan_time,
+            sensor_longitude,
+            sensor_latitude,
+            sensor_altitude,
+            beam_width=beam_width,
+            area_of_influence=1.0
+        )
+        gv_data_d.attrs["gpm_gv_input_files"] = input_files
+        return gv_data_d, gv_data_fpavg
 
 
 gv_data_gpm = GPMGV(
