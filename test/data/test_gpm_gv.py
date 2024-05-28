@@ -35,21 +35,7 @@ def test_load_reference_data(gpm_gv_match):
     Ensure that loading of reference data from multiple granules works.
     """
     input_granule, gpm_gv_granules = gpm_gv_match
-    reference_data = gv_data_gpm.load_reference_data(
-        input_granule,
-        gpm_gv_granules
-    )
-    assert "surface_precip" in reference_data
-    assert "radar_quality_index" in reference_data
-    assert "gauge_correction_factor" in reference_data
-
-
-def test_load_reference_data_fpavg(gpm_gv_match):
-    """
-    Ensure that loading of reference data from multiple granules works.
-    """
-    input_granule, gpm_gv_granules = gpm_gv_match
-    reference_data = gv_data_gpm.load_reference_data_fpavg(
+    reference_data, reference_data_fpavg = gv_data_gpm.load_reference_data(
         input_granule,
         gpm_gv_granules,
         beam_width=0.98
@@ -57,3 +43,6 @@ def test_load_reference_data_fpavg(gpm_gv_match):
     assert "surface_precip" in reference_data
     assert "radar_quality_index" in reference_data
     assert "gauge_correction_factor" in reference_data
+    assert "surface_precip" in reference_data_fpavg
+    assert "radar_quality_index" in reference_data_fpavg
+    assert "gauge_correction_factor" in reference_data_fpavg
