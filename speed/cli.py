@@ -6,11 +6,12 @@ The command line interface of SPEED.
 """
 from calendar import monthrange
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
 import logging
 import multiprocessing
 from pathlib import Path
+from rich.progress import track
 from typing import List
-from tqdm import tqdm
 import xarray as xr
 
 import click
@@ -93,7 +94,6 @@ def extract_data(
             LOGGER.exception(exc)
 
 
-cli.add_command(extract_data)
 
 
 @click.command()
@@ -109,12 +109,14 @@ cli.add_command(extract_data)
     type=int,
     default=256,
 )
+@click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
 def extract_training_data_spatial(
         collocation_path: str,
         output_folder: str,
         overlap: float = 0.0,
         size: int = 256,
-        min_input_frac: float = None
+        min_input_frac: float = None,
+        include_geo_ir: bool = False
 ) -> int:
     """
     Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes
@@ -134,20 +136,17 @@ def extract_training_data_spatial(
 
 
     collocation_files = sorted(list(collocation_path.glob("*.nc")))
-    for collocation_file in tqdm(collocation_files):
+    for collocation_file in track(collocation_files, "Extracting spatial training data:"):
 
         sensor_name = collocation_file.name.split("_")[1]
-        input_data = xr.load_dataset(collocation_file, group="input_data")
-        reference_data = xr.load_dataset(collocation_file, group="reference_data")
 
         try:
             extract_scenes(
-                sensor_name,
-                input_data,
-                reference_data,
+                collocation_file,
                 output_folder,
                 overlap=overlap,
                 size=size,
+                include_geo_ir=include_geo_ir
             )
         except Exception:
             LOGGER.exception(
@@ -157,17 +156,15 @@ def extract_training_data_spatial(
 
     return 1
 
-cli.add_command(extract_training_data_spatial, name="extract_training_data_spatial")
-cli.add_command(cpcir.cli, name="extract_cpcir_obs")
-cli.add_command(goes.cli, name="extract_goes_obs")
-
 
 @click.command()
 @click.argument("collocation_path")
 @click.argument("output_folder")
+@click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
 def extract_training_data_tabular(
         collocation_path: str,
         output_folder: str,
+        include_geo_ir: bool = False
 ) -> int:
     """
     Extract tabular training data from collocations in COLLOCATION_PATH and write resulting files
@@ -187,7 +184,7 @@ def extract_training_data_tabular(
 
 
     collocation_files = sorted(list(collocation_path.glob("*.nc")))
-    for collocation_file in tqdm(collocation_files[:50]):
+    for collocation_file in track(collocation_files, description="Extracting tabular training data:"):
 
         sensor_name = collocation_file.name.split("_")[1]
         input_data = xr.load_dataset(collocation_file, group="input_data")
@@ -196,15 +193,17 @@ def extract_training_data_tabular(
         inpt_data = []
         anc_data = []
         trgt_data = []
+        geo_ir = []
 
         try:
-            inpt, anc, trgt = extract_training_data(
-                input_data,
-                reference_data,
+            inpt, anc, trgt, gir = extract_training_data(
+                collocation_file,
+                include_geo_ir=include_geo_ir
             )
             inpt_data.append(inpt)
             anc_data.append(anc)
             trgt_data.append(trgt)
+            geo_ir.append(gir)
 
         except Exception:
             LOGGER.exception(
@@ -222,10 +221,72 @@ def extract_training_data_tabular(
     ancillary_data.to_netcdf(output_folder / "ancillary" / "ancillary.nc")
     (output_folder / "target").mkdir(exist_ok=True)
     target_data.to_netcdf(output_folder / "target" / "target.nc")
+    if geo_ir is not None:
+        geo_ir = xr.concat(geo_ir, dim="samples")
+        (output_folder / "geo_ir").mkdir(exist_ok=True)
+        geo_ir.to_netcdf(output_folder / "geo_ir" / "geo_ir.nc")
 
     return 0
 
+
+@click.command()
+@click.argument("collocation_path")
+@click.argument("output_folder")
+@click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
+@click.option("--glob_pattern", help="Optional glob pattern to subsect input files.", default="*.nc")
+def extract_evaluation_data(
+        collocation_path: str,
+        output_folder: str,
+        include_geo_ir: bool = False,
+        glob_pattern: str = "*.nc"
+) -> int:
+    """
+    Extract evaluation data in COLLOCATION_PATH and write scenes to OUTPUT_FOLDER.
+    """
+    from speed.data.utils import extract_evaluation_data
+
+    output_folder = Path(output_folder)
+    output_folder.mkdir(exist_ok=True, parents=True)
+
+    collocation_path = Path(collocation_path)
+    if not collocation_path.exists():
+        LOGGER.error(
+            "'collocation_path' must point to an existing directory."
+        )
+        return 1
+
+    files_native = sorted(list((collocation_path / "native").glob(glob_pattern)))
+    files_gridded = sorted(list((collocation_path / "gridded").glob(glob_pattern)))
+
+    times_native = {}
+    for f_native in files_native:
+        time_str = f_native.name.split("_")[2][:-3]
+        median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+        times_native[median_time] = f_native
+
+    times_gridded = {}
+    for f_gridded in files_gridded:
+        time_str = f_gridded.name.split("_")[2][:-3]
+        median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+        times_gridded[median_time] = f_gridded
+
+    combined = set(times_gridded.keys()).intersection(set(times_native.keys()))
+
+    LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
+
+    for median_time in track(combined, description="Extracting evaluation data:"):
+        extract_evaluation_data(
+            times_gridded[median_time],
+            times_native[median_time],
+            output_folder,
+            include_geo_ir=include_geo_ir
+        )
+
+
+
+cli.add_command(extract_data, name="extract_data")
 cli.add_command(extract_training_data_spatial, name="extract_training_data_spatial")
 cli.add_command(extract_training_data_tabular, name="extract_training_data_tabular")
+cli.add_command(extract_evaluation_data, name="extract_evaluation_data")
 cli.add_command(cpcir.cli, name="extract_cpcir_obs")
 cli.add_command(goes.cli, name="extract_goes_obs")

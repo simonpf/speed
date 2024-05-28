@@ -571,7 +571,7 @@ TARGET_VARIABLES = [
 
 
 def save_target_data(
-        input_data: xr.Dataset,
+        reference_data: xr.Dataset,
         time: datetime,
         path: Path
 ) -> None:
@@ -579,7 +579,7 @@ def save_target_data(
     Save input data in separate folder.
 
     Args:
-        input_data: A xarray.Dataset containing all retrieval input data
+        reference_data: A xarray.Dataset containing all retrieval reference data
             for a single training scene.
         time: The median time of the scene.
         path: The base folder in which to store the extracted training
@@ -591,34 +591,67 @@ def save_target_data(
     output_path = path / "target"
     output_path.mkdir(exist_ok=True)
 
-    target_data = input_data[TARGET_VARIABLES]
+    target_data = reference_data[TARGET_VARIABLES]
     target_data.to_netcdf(output_path / filename)
 
 
+def save_geo_ir_data(
+        geo_ir_data: xr.Dataset,
+        time: datetime,
+        path: Path
+) -> None:
+    """
+    Save GEO IR data in separate folder.
+
+    Args:
+        geo_ir_data: A xarray.Dataset containing all retrieval input data
+            for a single training scene.
+        time: The median time of the scene.
+        path: The base folder in which to store the extracted training
+            scenes.
+    """
+    date_str = time.strftime("%Y%m%d%H%M%S")
+    filename = f"geo_ir_{date_str}.nc"
+
+    output_path = path / "geo_ir"
+    output_path.mkdir(exist_ok=True)
+    geo_ir_data = geo_ir_data.rename(tbs_ir="observations")
+    geo_ir_data.to_netcdf(output_path / filename)
 
 
 def extract_scenes(
-        sensor_name: str,
-        input_data: xr.Dataset,
-        reference_data: xr.Dataset,
+        collocation_file: Path,
         output_folder: Path,
         size: int = 256,
         overlap: float = 0.0,
         min_valid_input_frac: float = 0.75,
-        min_valid_ref_frac: float = 0.25
-):
+        min_valid_ref_frac: float = 0.25,
+        include_geo_ir: bool = False
+) -> None:
     """
-    Extract scenes of a given size from collocations.
+    Extract scenes of a given size from a collocation file suitable for training spatially-resolved
+    retrievals. Each scene is stored in a different files and files are  split up by input source,
+    ancillary data and target files.
 
     Args:
-        sensor_name: The name of the sensor for which the training data
-            is extracted.
-        input_data: An xarray.Dataset containing the retrievl input data.
-        reference_data: An xarray.Dataset containing the correpsonding reference data.
+        collocation_file: A path pointing to the file containing the collocation data from which
+            to extract training scenes.
         output_folder: The folder to which to write the extracted scenes.
         size: The size of the scenes.
         overlap: The maximum overlap in any direction between two scenes.
+        min_valid_input_frac: The minimum fraction of pixels with valid observations for a scene
+            to be considered valid.
+        min_valid_ref_frac: The minimum fraction of pixels with valid reference data for a scene
+            to be considered valid.
+        include_geo_ir: If True, will try to extract GEO IR data for each training scene.
     """
+    input_data = xr.load_dataset(collocation_file, group="input_data")
+    reference_data = xr.load_dataset(collocation_file, group="reference_data")
+    if include_geo_ir:
+        geo_ir_data = xr.load_dataset(collocation_file, group="geo_ir")
+    else:
+        geo_ir_data = None
+
     spatial_dims = input_data.tbs_mw.dims[:2]
     n_rows = input_data[spatial_dims[0]].size
     n_cols = input_data[spatial_dims[1]].size
@@ -638,6 +671,7 @@ def extract_scenes(
     max_retries = 100
     curr_try = 0
     n_inds = len(row_inds)
+
 
     while curr_try < max_retries and len(row_inds) > 0:
 
@@ -678,6 +712,12 @@ def extract_scenes(
         save_ancillary_data(inpt, time, output_folder)
         save_input_data(inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
+        if geo_ir_data is not None:
+            save_geo_ir_data(
+                geo_ir_data[{name: slc for name, slc in zip(spatial_dims, slices)}],
+                time,
+                output_folder
+            )
 
         margin = max((1.0 - overlap) * size, 1)
         covered = (
@@ -693,24 +733,95 @@ def extract_scenes(
             curr_try = 0
 
 
+def extract_evaluation_data(
+        collocation_file_gridded: Path,
+        collocation_file_native: Path,
+        output_folder: Path,
+        include_geo_ir: bool = False
+) -> None:
+    """
+    This function extract full collocation data from collocation file and stores it in the same
+    way 'extract_scenes' but keeps collocations in both gridded and native format.
+
+    Args:
+        collocation_file_gridded: A path pointing to a file containing a SPEED collocation
+            in native sampling.
+        collocation_file_gridded: A path pointing to a file containing a SPEED collocation
+            in regridded format.
+        output_folder: The folder to which to write the extracted scenes.
+        include_geo_ir: It 'True', will extract GEO IR observations for all evaluation scenes.
+    """
+    time_str = collocation_file_native.name.split("_")[2][:-3]
+    time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+
+    # Extract gridded data.
+    input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
+    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    save_ancillary_data(input_data, time, output_folder / "gridded")
+    save_input_data(input_data, time, output_folder / "gridded")
+    save_target_data(reference_data, time, output_folder / "gridded")
+    if include_geo_ir:
+        geo_ir_data = xr.load_dataset(collocation_file_gridded, group="geo_ir")
+        save_geo_ir_data(
+            geo_ir_data[{name: slc for name, slc in zip(spatial_dims, slices)}],
+            time,
+            output_folder / "gridded"
+        )
+
+    # Extract native data.
+    input_data = xr.load_dataset(collocation_file_native, group="input_data")
+    reference_data = xr.load_dataset(collocation_file_native, group="reference_data")
+    save_ancillary_data(input_data, time, output_folder / "native")
+    save_input_data(input_data, time, output_folder / "native")
+    save_target_data(reference_data, time, output_folder / "native")
+    if include_geo_ir:
+        geo_ir_data = xr.load_dataset(collocation_file_native, group="geo_ir")
+        save_geo_ir_data(
+            geo_ir_data[{name: slc for name, slc in zip(spatial_dims, slices)}],
+            time,
+            output_folder / "native"
+        )
+
+
+
 def extract_training_data(
-        input_data: xr.Dataset,
-        reference_data: xr.Dataset,
+        collocation_file: Path,
+        include_geo_ir: bool = False
 ):
     """
     Extract tabular training data from collocation.
 
     Args:
-        input_data: An xarray.Dataset containing the retrievl input data.
-        reference_data: An xarray.Dataset containing the correpsonding reference data.
+        collocation_file: A path object pointing to a collocation file from which to extract
+             the training data.
+        include_geo_ir: If 'True' will try to load geo IR data and include it in the
+             training data.
 
     Return:
         A tuple ``(input_data, ancillary_data, target_data)`` containing the input, ancillary
         and target data for the retrieval.
     """
-    valid_input = np.any(np.isfinite(input_data.tbs_mw.data), -1)
+    input_data = xr.load_dataset(collocation_file, group="input_data")
+    reference_data = xr.load_dataset(collocation_file, group="reference_data")
     valid_output = np.isfinite(reference_data.surface_precip.data)
+
+    valid_input = np.zeros_like(valid_output)
+    valid_input += np.any(np.isfinite(input_data.tbs_mw.data), -1)
+
+    if include_geo_ir:
+        geo_ir = xr.load_dataset(collocation_file, group="geo_ir")
+        geo_ir = geo_ir.rename(tbs_ir="observations")
+        valid_input += np.isfinite(geo_ir.observations.data).any(0)
+    else:
+        geo_ir = None
+
     valid = valid_input * valid_output
+
+    if geo_ir is not None:
+        geo_ir = xr.Dataset({
+            "time": ("time", geo_ir.time.data),
+            "observations": (("samples", "time"), geo_ir.observations.data[:, valid].transpose())
+        })
 
     ancillary_data = xr.Dataset({
         name: (("samples",), input_data[name].data[valid])
@@ -755,7 +866,8 @@ def extract_training_data(
                 "stratiform_fraction",
         ]
     })
-    return input_data, ancillary_data, target_data
+
+    return input_data, ancillary_data, target_data, geo_ir
 
 
 def lla_to_ecef(

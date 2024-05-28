@@ -4,6 +4,7 @@ speed.data.cpcir
 
 This module contains functionality to add CPCIR (MERGEDIR) observations to collocations.
 """
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
@@ -15,13 +16,13 @@ from pansat import TimeRange
 from pansat.time import to_datetime64
 from pansat.products.satellite.gpm import merged_ir
 from pyresample.geometry import SwathDefinition
+from rich.progress import Progress
 import xarray as xr
 
 from speed.data.utils import resample_data, round_time
 
 
 LOGGER = logging.getLogger(__name__)
-
 
 
 def add_cpcir_obs(
@@ -85,34 +86,50 @@ def add_cpcir_obs(
 
     # Save data in gridded format.
     cpcir_data_g = xr.concat(cpcir_data_g, "time").sortby("time").rename({"Tb": "tbs_ir"})
-    cpcir_data_g = cpcir_data_g.interp(time=time_steps, method="nearest")
-    output_path = path_gridded.parent.parent / "cpcir" / "gridded"
-    output_path.mkdir(exist_ok=True, parents=True)
-    cpcir_data_g.to_netcdf(output_path / f"cpcir_{time_str}.nc")
+    cpcir_data_g.tbs_ir.encoding = {"dtype": "uint16", "_FillValue": 0, "scale_factor": 0.01}
+    cpcir_data_g = cpcir_data_g.interp(time=time_steps.astype("datetime64[ns]"), method="nearest")
+    input_data = xr.load_dataset(path_gridded, group="input_data")
+    reference_data = xr.load_dataset(path_gridded, group="reference_data")
+    input_data.to_netcdf(path_gridded, group="input_data")
+    reference_data.to_netcdf(path_gridded, group="reference_data", mode="a")
+    cpcir_data_g.to_netcdf(path_gridded, group="geo_ir", mode="a")
 
     # Save data in gridded format.
     cpcir_data_n = xr.concat(cpcir_data_n, "time").sortby("time").rename({"Tb": "tbs_ir"})
-    cpcir_data_n = cpcir_data_n.interp(time=time_steps, method="nearest")
-    output_path = path_gridded.parent.parent / "cpcir" / "native"
-    output_path.mkdir(exist_ok=True, parents=True)
-    cpcir_data_n.to_netcdf(output_path / f"cpcir_{time_str}.nc")
+    cpcir_data_n.tbs_ir.encoding = {"dtype": "uint16", "_FillValue": 0, "scale_factor": 0.01}
+    cpcir_data_n = cpcir_data_n.interp(time=time_steps.astype("datetime64[ns]"), method="nearest")
+    input_data = xr.load_dataset(path_native, group="input_data")
+    reference_data = xr.load_dataset(path_native, group="reference_data", mode="a")
+    input_data.to_netcdf(path_native, group="input_data")
+    reference_data.to_netcdf(path_native, group="reference_data", mode="a")
+    cpcir_data_n.to_netcdf(path_native, group="geo_ir", mode="a")
 
 
 @click.command()
 @click.argument("collocation_path", type=str)
-@click.option("--n_steps", type=int, default=8)
+@click.option(
+    "--time_range",
+    type=int,
+    default=8,
+    help="The width of the time interval in hours for which to extract the CPCIR observations"
+)
+@click.option(
+    "--n_processes",
+    type=int,
+    default=8,
+    help="The number of processes to use for the data extraction."
+)
 def cli(
         collocation_path: str,
-        n_steps: int = 8
+        time_range: int = 8,
+        n_processes: int = 4
 ):
     """
-    Extract CPCIR (MERGEDIR) observations matching GPM collocations.
-
-    speed extract_cpcir collocation_path --n_steps N
+    Extract CPCIR (MERGEDIR) observations for GPM collocations in COLLOCATION_PATH.
 
     Extracts CPCIR observations for all collocations found in 'collocation_path' in both gridded
-    and native projections. 'N' defines the number of half-hourly time steps centered on the
-    median overpass time are extracted.
+    and native projections. 'time_range' defines the a time interval in hours  centered on the
+    median overpass time for which observations are extracted.
     """
     collocation_path = Path(collocation_path)
     if not collocation_path.exists():
@@ -138,9 +155,34 @@ def cli(
 
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
-    for median_time in combined:
-        add_cpcir_obs(
-            times_native[median_time],
-            times_gridded[median_time],
-            n_steps=n_steps
-        )
+    pool = ProcessPoolExecutor(max_workers=n_processes)
+    tasks = []
+
+    try:
+        for median_time in combined:
+            tasks.append(pool.submit(
+                add_cpcir_obs,
+                times_native[median_time],
+                times_gridded[median_time],
+                n_steps=time_range * 2
+            ))
+
+        with Progress() as progress:
+            prog = progress.add_task("Extracting CPCIR observations:", total=len(tasks))
+            for median_time, task in zip(combined, tasks):
+                try:
+                    task.result()
+                except KeyboardInterrupt as exc:
+                    raise exc
+                except Exception as exc:
+                    LOGGER.exception(
+                        "Encountered an error when processing collocation with median overpass time %s.",
+                        median_time
+                    )
+
+                progress.update(prog, advance=1)
+
+    except KeyboardInterrupt:
+        for task in tasks:
+            task.cancel()
+        pool.shutdown(wait=False)

@@ -84,8 +84,8 @@ def find_goes_files(
 def add_goes_obs(
         path_native: Path,
         path_gridded: Path,
-        n_steps: int = 8,
-        sector: str = "conus"
+        n_steps: int = 4,
+        sector: str = "full"
 ):
     """
     Add GOES observations for extracted collocations.
@@ -112,8 +112,6 @@ def add_goes_obs(
 
 
     goes_recs = find_goes_files(products, time_steps.min(), time_steps.max(), time_step)
-    print(time_steps)
-    print(list(goes_recs.keys()))
     assert all([step in goes_recs for step in time_steps])
 
     with xr.open_dataset(path_gridded, group="input_data") as data_gridded:
@@ -151,14 +149,22 @@ def add_goes_obs(
         goes_data_n.append(goes_obs)
         # Save data in gridded format.
 
-    goes_data_g = xr.Dataset({
-        "latitude": (("latitude"), lats_g),
-        "longitude": (("longitude"), lons_g),
-        "obs": (("latitude", "longitude", "time", "channel"), np.stack(goes_data_g, 2)),
-    })
-    output_path = path_gridded.parent.parent / "goes"
-    output_path.mkdir(exist_ok=True)
-    goes_data_g.to_netcdf(output_path / f"goes_{time_str}.nc")
+    goes_data_g = xr.Dataset(
+        {
+            "latitude": (("latitude"), lats_g.astype(np.float32)),
+            "longitude": (("longitude"), lons_g.astype(np.float32)),
+            "observations": (
+                ("latitude", "longitude", "time", "channel"),
+                np.stack(goes_data_g, 2).astype(np.float32)
+            ),
+        },
+        encoding = {
+            "observations": {"dtype": "float32", "zlib": True}
+        }
+    )
+
+    goes_data_g.to_netcdf(path_gridded, group="geo")
+    goes_data_n.to_netcdf(path_native, group="geo")
 
 
 
