@@ -436,13 +436,19 @@ class MRMS(ReferenceData):
         self,
         input_granule: Granule,
         granules: List[Granule],
+        radius_of_influence: float,
         beam_width: float
     ) -> Optional[xr.Dataset]:
         """
         Load reference data for a given granule of MRMS data.
 
         Args:
-            granule: A granule object specifying the data to load.
+            input_granule: The matched input data granules.
+            granules: A list containing the matched reference data granules.
+            radius_of_influence: The radius of influence to use for the resampling
+                of the scan times.
+            beam_width: The beam width to use for the calculation of footprint-averaged
+                precipitation.
 
         Return:
             An xarray.Dataset containing the MRMS reference data.
@@ -541,7 +547,11 @@ class MRMS(ReferenceData):
         scan_time, _ = xr.broadcast(input_data.scan_time, input_data.latitude)
         dtype = scan_time.dtype
         input_data["scan_time"] = scan_time.astype("int64")
-        scan_time = resample_data(input_data, area)["scan_time"].astype(dtype)
+        scan_time = resample_data(
+            input_data,
+            area,
+            radius_of_influence=radius_of_influence
+        )["scan_time"].astype(dtype)
         mrms_data = interp_along_swath(
             mrms_data.sortby('time'),
             scan_time,
@@ -577,67 +587,6 @@ class MRMS(ReferenceData):
         return mrms_data_d, mrms_data_fpavg
 
 
-    def load_reference_data_fpavg(
-        self,
-        input_granule: Granule,
-        granules: List[Granule],
-        beam_width: float
-    ):
-
-        input_data = input_granule.open()
-        latitudes = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
-        longitudes = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
-        sensor_latitude = input_data.spacecraft_latitude
-        sensor_longitude = input_data.spacecraft_longitude
-        sensor_altitude = input_data.spacecraft_altitude
-
-        coords = input_granule.geometry.bounding_box_corners
-        lon_min, lat_min, lon_max, lat_max = coords
-
-        ref_data = []
-
-        col_start = None
-        col_end = None
-        row_start = None
-        row_end = None
-
-        input_files = []
-
-        data_combined = Non
-
-        for granule in granules:
-
-            mrms_data = load_mrms_data(granule)
-
-            if col_start is None:
-                lon_indices = np.where((mrms_data.longitude.data >= lon_min) * (mrms_data.longitude.data <= lon_max))[0]
-                lat_indices = np.where((mrms_data.latitude.data >= lat_min) * (mrms_data.latitude.data <= lat_max))[0]
-                row_start = lat_indices.min()
-                row_end = lat_indices.max()
-                col_start = lon_indices.min()
-                col_end = lon_indices.max()
-
-            mrms_data = mrms_data[{"latitude": slice(row_start, row_end), "longitude": slice(row_start, row_end)}]
-            input_files += mrms_data.attrs["input_files"]
-            mrms_data_r = footprint_average_mrms_data(
-                mrms_data,
-                longitudes,
-                latitudes,
-                scan_time,
-                sensor_longitude,
-                sensor_latitude,
-                sensor_altitude,
-                beam_width=beam_width,
-                area_of_influence=1.0
-            )
-            if data_combined is None:
-                data_combined = mrms_data_r
-            else:
-                for var in data_combined:
-                    mask = np.isfinite(mrms_data_r[var].data)
-                    data_combined[var].data[mask] = mrms_data_r[var].data[mask]
-
-        return data_combined
 
 
 mrms_data = MRMS("mrms")

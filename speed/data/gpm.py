@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional
 
 from gprof_nn.data.l1c import L1CFile
 from gprof_nn.data import preprocessor
+import pansat
 from pansat import FileRecord, TimeRange, Granule
 from pansat.environment import get_index
 from pansat.products.satellite.gpm import (
@@ -182,9 +183,25 @@ class GPMInput(InputData):
     of the GPM constellation and combine this data with any of the reference
     data classes.
     """
-    def __init__(self, name, products, radius_of_influence=60e3):
+    def __init__(
+            self,
+            name: str,
+            products: List[pansat.Product],
+            beam_width: float = 0.98,
+            radius_of_influence: float = 60e3
+    ):
+        """
+        Args:
+            name: The name of the input data source, which is used to identify the data from
+                the command line interface.
+            products: The pansat products from which to obtain input data files.
+            beam_width: The beam width to use for the calculation of footprint averages.
+            radius_of_influence: The radius of influence to use for the resampling of the
+                sensor data.
+        """
         super().__init__(name)
         self.products = products
+        self.beam_width = beam_width
         self.radius_of_influence = radius_of_influence
 
         characteristics_dir = Path(__file__).parent / "sensor_characteristics"
@@ -269,7 +286,8 @@ class GPMInput(InputData):
         ref_data, ref_data_fpavg = reference_data.load_reference_data(
             inpt_granule,
             ref_granules,
-            beam_width=0.98
+            radius_of_influence=self.radius_of_influence,
+            beam_width=self.beam_width
         )
         if ref_data is None:
             LOGGER.info(
@@ -301,6 +319,7 @@ class GPMInput(InputData):
             min_scans=256,
             margin=64
         )
+        print(scan_start, scan_end)
         preprocessor_data = preprocessor_data[{"scans": slice(scan_start, scan_end)}]
         reference_data_r = reference_data_r[{"scans": slice(scan_start, scan_end)}]
         preprocessor_data.attrs["scan_start"] = inpt_granule.primary_index_range[0] + scan_start
@@ -310,6 +329,8 @@ class GPMInput(InputData):
         n_rows = ref_data.latitude.size
         col_start = ref_data.attrs.get("lower_left_col", 0)
         n_cols = ref_data.longitude.size
+        print(row_start, n_rows)
+        print(col_start, n_cols)
 
         # Determine number of valid reference pixels in scene.
         if "surface_precip" in reference_data_r:
@@ -454,7 +475,7 @@ MHS_PRODUCTS = [
 ]
 mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3)
 
-gmi = GPMInput("gmi", [l1c_r_gpm_gmi], radius_of_influence=15e3)
+gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=0.98, radius_of_influence=15e3)
 
 AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
-amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=64e3)
+amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)

@@ -61,14 +61,25 @@ def load_gv_data(
 
     # Load and resample precip rate.
     precip_data = precip_rate_prod.open(precip_rate_rec)
+    invalid = precip_data.precip_rate.data < 0.0
+    precip_data.precip_rate.data[invalid] = np.nan
     input_files.append(precip_rate_rec.filename)
+
+    lons = precip_data.longitude.data
+    lats = precip_data.latitude.data
 
     # Find and resample corresponding radar quality index data.
     rqi_recs = rqi_prod.get(precip_rate_rec.central_time)
     rqi_rec = precip_rate_rec.find_closest_in_time(rqi_recs)[0]
     if precip_rate_rec.time_difference(rqi_rec).total_seconds() > 0:
         return None
-    rqi_data = rqi_prod.open(rqi_rec)
+    rqi_data = rqi_prod.open(rqi_rec).interp(
+        longitude=lons,
+        latitude=lats,
+        method="nearest"
+    )
+    invalid = rqi_data.rqi.data < 0.0
+    rqi_data.rqi.data[invalid] = np.nan
     input_files.append(rqi_rec.filename)
 
     # Find and resample precip type data.
@@ -76,7 +87,14 @@ def load_gv_data(
     precip_type_rec = precip_rate_rec.find_closest_in_time(precip_type_recs)[0]
     if precip_rate_rec.time_difference(precip_type_rec).total_seconds() > 0:
         return None
-    precip_type_data = precip_type_prod.open(precip_type_rec)
+    precip_type_data = precip_type_prod.open(precip_type_rec).interp(
+        longitude=lons,
+        latitude=lats,
+        method="nearest"
+    )
+
+    invalid = precip_type_data.mask.data < 0.0
+    precip_type_data.mask.data[invalid] = np.nan
     input_files.append(precip_type_rec.filename)
 
     # Find and resample gauge correction factors.
@@ -89,7 +107,14 @@ def load_gv_data(
             precip_rate_rec.filename
         )
         return None
-    gcf_data = gcf_prod.open(precip_gcf_rec).drop_vars(["time"])
+    gcf_data = gcf_prod.open(precip_gcf_rec).drop_vars(["time"]).interp(
+        longitude=lons,
+        latitude=lats,
+        method="nearest"
+    )
+
+    invalid = gcf_data["1hcf"].data < 0.0
+    gcf_data["1hcf"].data[invalid] = np.nan
 
     input_files.append(precip_gcf_rec.filename)
 
@@ -121,7 +146,9 @@ class GPMGV(ReferenceData):
         self,
         input_granule: Granule,
         granules: List[Granule],
+        radius_of_influence: float,
         beam_width: float
+
     ) -> Optional[xr.Dataset]:
         """
         Load reference data for a given granule of MRMS data.
@@ -129,6 +156,8 @@ class GPMGV(ReferenceData):
         Args:
             input_granule: The granule of the input observations.
             granules: A list containing the matched reference data granules
+            radius_of_influence: The radius of influence to use for the resampling
+                of the scan times.
             beam_width: The beam width to assume for calculating footprint
                 averages.
 
@@ -227,7 +256,11 @@ class GPMGV(ReferenceData):
         scan_time, _ = xr.broadcast(input_data.scan_time, input_data.latitude)
         dtype = scan_time.dtype
         input_data["scan_time"] = scan_time.astype("int64")
-        scan_time = resample_data(input_data, area)["scan_time"].astype(dtype)
+        scan_time = resample_data(
+            input_data,
+            area,
+            radius_of_influence=radius_of_influence
+        )["scan_time"].astype(dtype)
         gv_data = interp_along_swath(gv_data.sortby("time"), scan_time, dimension="time")
         gv_data_d, _ = downsample_mrms_data(gv_data, grid=grid)
 
