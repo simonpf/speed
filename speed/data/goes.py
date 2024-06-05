@@ -4,13 +4,15 @@ speed.data.goes
 
 This module contains functionality to add GOES 16 observations to collocations.
 """
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict, List
+import warnings
 
 import click
-
 import numpy as np
 from pansat import TimeRange, FileRecord
 from pansat.time import to_datetime64
@@ -18,10 +20,12 @@ from pansat.products.satellite.goes import (
     GOES16L1BRadiances
 )
 from pyresample.geometry import SwathDefinition
+from rich.progress import track, Progress
 from satpy import Scene
 import xarray as xr
 
 from speed.data.utils import round_time
+import speed.logging
 
 
 LOGGER = logging.getLogger(__name__)
@@ -132,21 +136,32 @@ def add_goes_obs(
     goes_data_g = []
     goes_data_n = []
 
-    for time in time_steps:
+    with TemporaryDirectory() as tmp:
+        for time in time_steps:
+            try:
+                logging.disable(logging.CRITICAL)
+                recs = [rec.get() for rec in goes_recs[time]]
 
-        recs = [rec.get() for rec in goes_recs[time]]
-        scene = Scene([str(rec.local_path) for rec in recs])
-        scene.load([f"C{ind:02}" for ind in range(1, 17)])
+                with warnings.catch_warnings():
+                    scene = Scene([str(rec.local_path) for rec in recs])
+                    scene.load([f"C{ind:02}" for ind in range(1, 17)])
+                    scene_g = scene.resample(grid, generate=False, cache_dir=tmp)
+                goes_obs = scene_g.to_xarray_dataset()
+                goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
+                goes_data_g.append(goes_obs)
 
-        scene_g = scene.resample(grid, generate=False)
-        goes_obs = scene_g.to_xarray_dataset()
-        goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
-        goes_data_g.append(goes_obs)
+                with warnings.catch_warnings():
+                    scene_n = scene.resample(swath, generate=False, cache_dir=tmp)
+                goes_obs = scene_n.to_xarray_dataset()
+                goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
+                goes_data_n.append(goes_obs)
 
-        scene_n = scene.resample(swath, generate=False)
-        goes_obs = scene_n.to_xarray_dataset()
-        goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
-        goes_data_n.append(goes_obs)
+                del scene
+                del scene_g
+                del scene_n
+            finally:
+                logging.disable(logging.NOTSET)
+
         # Save data in gridded format.
 
     goes_data_g = xr.Dataset(
@@ -163,6 +178,11 @@ def add_goes_obs(
         }
     )
 
+    LOGGER.info(
+        "Saving GOES data for collocation %s.",
+        time_str
+    )
+
     goes_data_g.to_netcdf(path_gridded, group="geo")
     goes_data_n.to_netcdf(path_native, group="geo")
 
@@ -171,9 +191,11 @@ def add_goes_obs(
 @click.command()
 @click.argument("collocation_path", type=str)
 @click.option("--n_steps", type=int, default=8)
+@click.option("--n_processes", type=int, default=1)
 def cli(
         collocation_path: str,
-        n_steps: int = 8
+        n_steps: int = 8,
+        n_processes: int = 1
 ):
     """
     Extract GOES observations matching GPM collocations.
@@ -208,9 +230,45 @@ def cli(
 
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
-    for median_time in combined:
-        add_goes_obs(
-            times_native[median_time],
-            times_gridded[median_time],
-            n_steps=n_steps
+    if n_processes < 2:
+        for median_time in track(
+                combined,
+                description="Extracting GOES observations:",
+                console=speed.logging.get_console()
+        ):
+            try:
+                add_goes_obs(
+                    times_native[median_time],
+                    times_gridded[median_time],
+                    n_steps=n_steps
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Processing of the collocation with median time %s failed "
+                    "with the following error.",
+                    median_time
+                )
+    else:
+        pool = ProcessPoolExecutor(
+            max_workers=n_processes
         )
+        tasks = []
+        for median_time in combined:
+            tasks.append(pool.submit(
+                add_goes_obs,
+                times_native[median_time],
+                times_gridded[median_time],
+                n_steps=n_steps
+            ))
+        with Progress(console=speed.logging.get_console()) as progress:
+            task = progress.add_task("Extracting GOES observations:", total=len(tasks))
+            for task in as_completed(tasks):
+                try:
+                    task.result()
+                except Exception:
+                    LOGGER.exception(
+                        "The following error was encountered when processing collocation "
+                        "with median time %s.",
+                        median_time
+                    )
+                progress.advance(task, advance=1.0)

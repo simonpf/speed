@@ -4,6 +4,7 @@ speed.data.utils
 
 Utility functions for data processing.
 """
+from copy import copy
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
@@ -525,9 +526,13 @@ def save_ancillary_data(
     filename = f"ancillary_{date_str}.nc"
 
     output_path = path / "ancillary"
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True, parents=True)
 
-    ancillary_data = input_data[ANCILLARY_VARIABLES]
+    anc_vars = ANCILLARY_VARIABLES
+    if "latitude" not in input_data.dims:
+        anc_vars = copy(anc_vars) + ["latitude", "longitude"]
+
+    ancillary_data = input_data[anc_vars]
     ancillary_data.to_netcdf(output_path / filename)
 
 
@@ -550,7 +555,7 @@ def save_input_data(
     filename = f"pmw_{date_str}.nc"
 
     output_path = path / "pmw"
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True, parents=True)
 
     input_data = input_data[["tbs_mw", "earth_incidence_angle"]].rename({
         "tbs_mw": "observations"
@@ -561,19 +566,22 @@ def save_input_data(
 TARGET_VARIABLES = [
     "surface_precip",
     "radar_quality_index",
+    "gauge_correction_factor",
     "valid_fraction",
     "precip_fraction",
     "snow_fraction",
     "hail_fraction",
     "convective_fraction",
-    "stratiform_fraction"
+    "stratiform_fraction",
+    "time"
 ]
 
 
 def save_target_data(
         reference_data: xr.Dataset,
         time: datetime,
-        path: Path
+        path: Path,
+        include_swath_coords: bool = False
 ) -> None:
     """
     Save input data in separate folder.
@@ -584,14 +592,23 @@ def save_target_data(
         time: The median time of the scene.
         path: The base folder in which to store the extracted training
             scenes.
+        bool: If True will include the swath coordinates of the input pixels
+            on the native sensor geometry allowing results to be efficiently
+            remapped to the gridded data.
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"target_{date_str}.nc"
 
     output_path = path / "target"
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True, parents=True)
 
-    target_data = reference_data[TARGET_VARIABLES]
+    target_variables = copy(TARGET_VARIABLES)
+    if include_swath_coords:
+        target_variables += [
+            "scan_index",
+            "pixel_index"
+        ]
+    target_data = reference_data[target_variables]
     target_data.to_netcdf(output_path / filename)
 
 
@@ -614,7 +631,7 @@ def save_geo_ir_data(
     filename = f"geo_ir_{date_str}.nc"
 
     output_path = path / "geo_ir"
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True, parents=True)
     geo_ir_data = geo_ir_data.rename(tbs_ir="observations")
     geo_ir_data.to_netcdf(output_path / filename)
 
@@ -759,7 +776,12 @@ def extract_evaluation_data(
     reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
     save_ancillary_data(input_data, time, output_folder / "gridded")
     save_input_data(input_data, time, output_folder / "gridded")
-    save_target_data(reference_data, time, output_folder / "gridded")
+    save_target_data(
+        reference_data,
+        time,
+        output_folder / "gridded",
+        include_swath_coords = True
+    )
     if include_geo_ir:
         geo_ir_data = xr.load_dataset(collocation_file_gridded, group="geo_ir")
         save_geo_ir_data(
@@ -1063,7 +1085,11 @@ def calculate_footprint_averages(
     return xr.Dataset(results)
 
 
-def interp_along_swath(ref_data, scan_time, dimension="time"):
+def interp_along_swath(
+        ref_data: xr.Dataset,
+        scan_time: xr.DataArray,
+        dimension: str = "time"
+) -> xr.Dataset:
     """
     Interpolate time-gridded data to swath.
 

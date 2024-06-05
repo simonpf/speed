@@ -29,6 +29,11 @@ def test_load_gpm_gv_data(gpm_gv_match):
     assert "precip_type" in data
     assert "gauge_correction_factor" in data
 
+    assert np.any(data["surface_precip"].data >= 0.0)
+    assert np.any(data["radar_quality_index"].data >= 0.0)
+    assert np.any(data["precip_type"].data >= 0.0)
+    assert np.any(data["gauge_correction_factor"].data >= 0.0)
+
 
 def test_load_reference_data(gpm_gv_match):
     """
@@ -41,8 +46,11 @@ def test_load_reference_data(gpm_gv_match):
         beam_width=0.98
     )
     assert "surface_precip" in reference_data
+    assert np.any(reference_data["surface_precip"] >= 0.0)
     assert "radar_quality_index" in reference_data
+    assert np.any(reference_data["radar_quality_index"] >= 0.0)
     assert "gauge_correction_factor" in reference_data
+    assert np.any(reference_data["gauge_correction_factor"] >= 0.0)
     assert "surface_precip" in reference_data_fpavg
     assert "radar_quality_index" in reference_data_fpavg
     assert "gauge_correction_factor" in reference_data_fpavg
