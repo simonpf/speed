@@ -16,7 +16,8 @@ dependencies = [
     "pytest",
     "click",
     "cmocean",
-    "toml"
+    "toml",
+    "rich"
 ]
 dynamic = ["version"]
 
