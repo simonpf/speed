@@ -57,6 +57,7 @@ def extract_data(
     from speed.data.reference import get_reference_dataset
     import speed.data.gpm
     import speed.data.mrms
+    import speed.data.gpm_gv
     import speed.data.combined
 
     input_dataset = get_input_dataset(input_data)
@@ -184,16 +185,17 @@ def extract_training_data_tabular(
 
 
     collocation_files = sorted(list(collocation_path.glob("*.nc")))
+
+    inpt_data = []
+    anc_data = []
+    trgt_data = []
+    geo_ir = []
+
     for collocation_file in track(collocation_files, description="Extracting tabular training data:"):
 
         sensor_name = collocation_file.name.split("_")[1]
         input_data = xr.load_dataset(collocation_file, group="input_data")
         reference_data = xr.load_dataset(collocation_file, group="reference_data")
-
-        inpt_data = []
-        anc_data = []
-        trgt_data = []
-        geo_ir = []
 
         try:
             inpt, anc, trgt, gir = extract_training_data(
@@ -203,7 +205,8 @@ def extract_training_data_tabular(
             inpt_data.append(inpt)
             anc_data.append(anc)
             trgt_data.append(trgt)
-            geo_ir.append(gir)
+            if gir is not None:
+                geo_ir.append(gir)
 
         except Exception:
             LOGGER.exception(
@@ -221,7 +224,7 @@ def extract_training_data_tabular(
     ancillary_data.to_netcdf(output_folder / "ancillary" / "ancillary.nc")
     (output_folder / "target").mkdir(exist_ok=True)
     target_data.to_netcdf(output_folder / "target" / "target.nc")
-    if geo_ir is not None:
+    if len(geo_ir) > 0:
         geo_ir = xr.concat(geo_ir, dim="samples")
         (output_folder / "geo_ir").mkdir(exist_ok=True)
         geo_ir.to_netcdf(output_folder / "geo_ir" / "geo_ir.nc")
