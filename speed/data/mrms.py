@@ -237,10 +237,10 @@ def downsample_mrms_data(
         lat_max = lats_ref.max()
         valid_lons = np.where((lons >= lon_min) * (lons <= lon_max))[0]
         valid_lats = np.where((lats >= lat_min) * (lats <= lat_max))[0]
-        lon_start = valid_lons.min()
-        lon_end = valid_lons.max()
-        lat_start = valid_lats.min()
-        lat_end = valid_lats.max()
+        lon_start = max(valid_lons.min() - 64, 0)
+        lon_end = min(valid_lons.max() + 64, lons.size - 1)
+        lat_start = max(valid_lats.min() - 64, 0)
+        lat_end = min(valid_lats.max() + 64, lats.size - 1)
         grid = GLOBAL.grid[lat_start:lat_end, lon_start:lon_end]
         lower_left_row = lat_start
         lower_left_col = lon_start

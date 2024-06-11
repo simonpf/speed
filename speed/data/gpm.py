@@ -83,12 +83,14 @@ def run_preprocessor(gpm_granule: Granule) -> xr.Dataset:
         os.chdir(old_dir)
 
     preprocessor_data = preprocessor_data.rename({
-        "channels": "channels_gprof",
-        "brightness_temperatures": "tbs_mw_gprof",
+        "scans": "scan",
+        "pixels": "pixel",
+        "channels": "channel_gprof",
+        "brightness_temperatures": "observations_gprof",
         "earth_incidence_angle": "earth_incidence_angle_gprof"
     })
-    invalid = preprocessor_data.tbs_mw_gprof.data < 0
-    preprocessor_data.tbs_mw_gprof.data[invalid] = np.nan
+    invalid = preprocessor_data.observations_gprof.data < 0
+    preprocessor_data.observations_gprof.data[invalid] = np.nan
 
     return preprocessor_data
 
@@ -277,10 +279,10 @@ class GPMInput(InputData):
             preprocessor_data,
             self.radius_of_influence
         )
-        preprocessor_data["tbs_mw"] = (("scans", "pixels", "channels"), tbs_mw.data)
-        preprocessor_data["earth_incidence_angle"] = (("scans", "pixels", "channels"), eia_mw.data)
-        preprocessor_data["tbs_mw"].attrs.update(self.characteristics["channels"])
-        preprocessor_data["tbs_mw_gprof"].attrs.update(self.characteristics["channels_gprof"])
+        preprocessor_data["observations"] = (("scan", "pixel", "channel"), tbs_mw.data)
+        preprocessor_data["earth_incidence_angle"] = (("scan", "pixel", "channel"), eia_mw.data)
+        preprocessor_data["observations"].attrs.update(self.characteristics["channels"])
+        preprocessor_data["observations_gprof"].attrs.update(self.characteristics["channels_gprof"])
 
         # Load and combine reference data for all matche granules
         ref_data, ref_data_fpavg = reference_data.load_reference_data(
@@ -319,9 +321,9 @@ class GPMInput(InputData):
             min_scans=256,
             margin=64
         )
-        print(scan_start, scan_end)
-        preprocessor_data = preprocessor_data[{"scans": slice(scan_start, scan_end)}]
-        reference_data_r = reference_data_r[{"scans": slice(scan_start, scan_end)}]
+
+        preprocessor_data = preprocessor_data[{"scan": slice(scan_start, scan_end)}]
+        reference_data_r = reference_data_r[{"scan": slice(scan_start, scan_end)}]
         preprocessor_data.attrs["scan_start"] = inpt_granule.primary_index_range[0] + scan_start
         preprocessor_data.attrs["scan_end"] = inpt_granule.primary_index_range[0] + scan_end
 
@@ -329,8 +331,6 @@ class GPMInput(InputData):
         n_rows = ref_data.latitude.size
         col_start = ref_data.attrs.get("lower_left_col", 0)
         n_cols = ref_data.longitude.size
-        print(row_start, n_rows)
-        print(col_start, n_cols)
 
         # Determine number of valid reference pixels in scene.
         if "surface_precip" in reference_data_r:
@@ -375,6 +375,8 @@ class GPMInput(InputData):
         preprocessor_data_r = resample_data(
             preprocessor_data, grid, self.radius_of_influence
         )
+        for name, attr in preprocessor_data.attrs.items():
+            preprocessor_data_r.attrs[name] = attr
 
         indices = calculate_swath_resample_indices(
             preprocessor_data, grid, self.radius_of_influence

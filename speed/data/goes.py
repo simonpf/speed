@@ -135,6 +135,7 @@ def add_goes_obs(
 
     goes_data_g = []
     goes_data_n = []
+    times = []
 
     with TemporaryDirectory() as tmp:
         for time in time_steps:
@@ -155,6 +156,7 @@ def add_goes_obs(
                 goes_obs = scene_n.to_xarray_dataset()
                 goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
                 goes_data_n.append(goes_obs)
+                times.append(to_datetime64(recs[0].central_time.start))
 
                 del scene
                 del scene_g
@@ -164,27 +166,37 @@ def add_goes_obs(
 
         # Save data in gridded format.
 
-    goes_data_g = xr.Dataset(
-        {
-            "latitude": (("latitude"), lats_g.astype(np.float32)),
-            "longitude": (("longitude"), lons_g.astype(np.float32)),
-            "observations": (
-                ("latitude", "longitude", "time", "channel"),
-                np.stack(goes_data_g, 2).astype(np.float32)
-            ),
-        },
-        encoding = {
-            "observations": {"dtype": "float32", "zlib": True}
-        }
-    )
-
+    times = np.array(times)
     LOGGER.info(
         "Saving GOES data for collocation %s.",
         time_str
     )
 
-    goes_data_g.to_netcdf(path_gridded, group="geo")
-    goes_data_n.to_netcdf(path_native, group="geo")
+    goes_data_g = xr.Dataset(
+        {
+            "latitude": (("latitude"), lats_g.astype(np.float32)),
+            "longitude": (("longitude"), lons_g.astype(np.float32)),
+            "time": (("time",), times),
+            "observations": (
+                ("latitude", "longitude", "time", "channel"),
+                np.stack(goes_data_g, 2).astype(np.float32)
+            ),
+        }
+    )
+    goes_data_g.observations.encoding = {"dtype": "float32", "zlib": True}
+    goes_data_g.to_netcdf(path_gridded, group="geo", mode="a")
+
+    goes_data_n = xr.Dataset(
+        {
+            "observations": (
+                ("scans", "pixels", "time", "channel"),
+                np.stack(goes_data_n, 2).astype(np.float32)
+            ),
+            "time": (("time",), times),
+        }
+    )
+    goes_data_n.observations.encoding = {"dtype": "float32", "zlib": True}
+    goes_data_n.to_netcdf(path_native, group="geo", mode="a")
 
 
 
@@ -261,7 +273,7 @@ def cli(
                 n_steps=n_steps
             ))
         with Progress(console=speed.logging.get_console()) as progress:
-            task = progress.add_task("Extracting GOES observations:", total=len(tasks))
+            extraction = progress.add_task("Extracting GOES observations:", total=len(tasks))
             for task in as_completed(tasks):
                 try:
                     task.result()
@@ -271,4 +283,4 @@ def cli(
                         "with median time %s.",
                         median_time
                     )
-                progress.advance(task, advance=1.0)
+                progress.advance(extraction, advance=1.0)

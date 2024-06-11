@@ -73,26 +73,33 @@ def extract_data(
     if days is None or len(days) == 0:
         days = list(range(1, monthrange(year, month)[1] + 1))
 
-    pool = ProcessPoolExecutor(max_workers=n_processes)
-    manager = multiprocessing.Manager()
+    if n_processes < 2:
+        for day in days:
+            try:
+                input_dataset.process_day(year, month, day, reference_dataset, output_folder)
+            except Exception as exc:
+                LOGGER.exception(exc)
+    else:
+        pool = ProcessPoolExecutor(max_workers=n_processes)
+        manager = multiprocessing.Manager()
 
-    tasks = {}
-    for day in days:
-        task = pool.submit(
-            input_dataset.process_day,
-            year,
-            month,
-            day,
-            reference_dataset,
-            output_folder,
-        )
-        tasks[task] = (year, month, day)
+        tasks = {}
+        for day in days:
+            task = pool.submit(
+                input_dataset.process_day,
+                year,
+                month,
+                day,
+                reference_dataset,
+                output_folder,
+            )
+            tasks[task] = (year, month, day)
 
-    for task in as_completed(tasks):
-        try:
-            task.result()
-        except Exception as exc:
-            LOGGER.exception(exc)
+        for task in as_completed(tasks):
+            try:
+                task.result()
+            except Exception as exc:
+                LOGGER.exception(exc)
 
 
 
@@ -110,6 +117,7 @@ def extract_data(
     type=int,
     default=256,
 )
+@click.option("--include_geo", help="Include GEO observations.", is_flag=True, default=False)
 @click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
 def extract_training_data_spatial(
         collocation_path: str,
@@ -117,6 +125,7 @@ def extract_training_data_spatial(
         overlap: float = 0.0,
         size: int = 256,
         min_input_frac: float = None,
+        include_geo: bool = False,
         include_geo_ir: bool = False
 ) -> int:
     """
@@ -147,7 +156,8 @@ def extract_training_data_spatial(
                 output_folder,
                 overlap=overlap,
                 size=size,
-                include_geo_ir=include_geo_ir
+                include_geo=include_geo,
+                include_geo_ir=include_geo_ir,
             )
         except Exception:
             LOGGER.exception(
@@ -161,10 +171,12 @@ def extract_training_data_spatial(
 @click.command()
 @click.argument("collocation_path")
 @click.argument("output_folder")
+@click.option("--include_geo", help="Include geo observations.", is_flag=True, default=False)
 @click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
 def extract_training_data_tabular(
         collocation_path: str,
         output_folder: str,
+        include_geo: bool = False,
         include_geo_ir: bool = False
 ) -> int:
     """
@@ -186,27 +198,26 @@ def extract_training_data_tabular(
 
     collocation_files = sorted(list(collocation_path.glob("*.nc")))
 
-    inpt_data = []
+    pmw_data = []
+    geo_data = []
+    geo_ir_data = []
     anc_data = []
-    trgt_data = []
-    geo_ir = []
+    target_data = []
 
     for collocation_file in track(collocation_files, description="Extracting tabular training data:"):
-
-        sensor_name = collocation_file.name.split("_")[1]
-        input_data = xr.load_dataset(collocation_file, group="input_data")
-        reference_data = xr.load_dataset(collocation_file, group="reference_data")
-
         try:
-            inpt, anc, trgt, gir = extract_training_data(
+            pmw, geo, geo_ir, anc, target, = extract_training_data(
                 collocation_file,
+                include_geo=include_geo,
                 include_geo_ir=include_geo_ir
             )
-            inpt_data.append(inpt)
+            pmw_data.append(pmw)
+            if geo is not None:
+                geo_data.append(geo)
+            if geo_ir is not None:
+                geo_ir_data.append(geo_ir)
             anc_data.append(anc)
-            trgt_data.append(trgt)
-            if gir is not None:
-                geo_ir.append(gir)
+            target_data.append(target)
 
         except Exception:
             LOGGER.exception(
@@ -214,20 +225,46 @@ def extract_training_data_tabular(
                 collocation_file
             )
 
-    input_data = xr.concat(inpt_data, dim="samples")
+    pmw_data = xr.concat(pmw_data, dim="samples")
     ancillary_data = xr.concat(anc_data, dim="samples")
-    target_data = xr.concat(trgt_data, dim="samples")
+    target_data = xr.concat(target_data, dim="samples")
 
+    encoding = {
+        "observations": {
+            "zlib": True,
+            "scale_factor": 0.01,
+            "dtype": "uint16",
+            "_FillValue": 2e16 - 1
+        }
+    }
     (output_folder / "pmw").mkdir(exist_ok=True)
-    input_data.to_netcdf(output_folder / "pmw" / "pmw.nc")
+    pmw_data.to_netcdf(
+        output_folder / "pmw" / "pmw.nc",
+    )
+
+
     (output_folder / "ancillary").mkdir(exist_ok=True)
-    ancillary_data.to_netcdf(output_folder / "ancillary" / "ancillary.nc")
+    ancillary_data.to_netcdf(
+        output_folder / "ancillary" / "ancillary.nc",
+    )
     (output_folder / "target").mkdir(exist_ok=True)
-    target_data.to_netcdf(output_folder / "target" / "target.nc")
-    if len(geo_ir) > 0:
-        geo_ir = xr.concat(geo_ir, dim="samples")
+    target_data.to_netcdf(
+        output_folder / "target" / "target.nc",
+    )
+    if len(geo_data) > 0:
+        geo_data = xr.concat(geo_data, dim="samples")
+        (output_folder / "geo").mkdir(exist_ok=True)
+        geo_data.to_netcdf(
+            output_folder / "geo" / "geo.nc",
+            encoding=encoding
+        )
+    if len(geo_ir_data) > 0:
+        geo_ir_data = xr.concat(geo_ir_data, dim="samples")
         (output_folder / "geo_ir").mkdir(exist_ok=True)
-        geo_ir.to_netcdf(output_folder / "geo_ir" / "geo_ir.nc")
+        geo_ir_data.to_netcdf(
+            output_folder / "geo_ir" / "geo_ir.nc",
+            encoding=encoding
+        )
 
     return 0
 
@@ -235,11 +272,13 @@ def extract_training_data_tabular(
 @click.command()
 @click.argument("collocation_path")
 @click.argument("output_folder")
+@click.option("--include_geo", help="Include geo observations.", is_flag=True, default=False)
 @click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
 @click.option("--glob_pattern", help="Optional glob pattern to subsect input files.", default="*.nc")
 def extract_evaluation_data(
         collocation_path: str,
         output_folder: str,
+        include_geo: bool = False,
         include_geo_ir: bool = False,
         glob_pattern: str = "*.nc"
 ) -> int:
@@ -282,6 +321,7 @@ def extract_evaluation_data(
             times_gridded[median_time],
             times_native[median_time],
             output_folder,
+            include_geo=include_geo,
             include_geo_ir=include_geo_ir
         )
 

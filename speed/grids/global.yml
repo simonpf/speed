@@ -6,7 +6,7 @@ global:
     no_defs: null
     type: crs
   shape:
-    height: 3298
+    height: 4948
     width: 9896
   area_extent:
     lower_left_xy: [-180, -90]

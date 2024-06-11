@@ -88,20 +88,12 @@ def add_cpcir_obs(
     cpcir_data_g = xr.concat(cpcir_data_g, "time").sortby("time").rename({"Tb": "tbs_ir"})
     cpcir_data_g.tbs_ir.encoding = {"dtype": "uint16", "_FillValue": 0, "scale_factor": 0.01}
     cpcir_data_g = cpcir_data_g.interp(time=time_steps.astype("datetime64[ns]"), method="nearest")
-    input_data = xr.load_dataset(path_gridded, group="input_data")
-    reference_data = xr.load_dataset(path_gridded, group="reference_data")
-    input_data.to_netcdf(path_gridded, group="input_data")
-    reference_data.to_netcdf(path_gridded, group="reference_data", mode="a")
     cpcir_data_g.to_netcdf(path_gridded, group="geo_ir", mode="a")
 
     # Save data in gridded format.
     cpcir_data_n = xr.concat(cpcir_data_n, "time").sortby("time").rename({"Tb": "tbs_ir"})
     cpcir_data_n.tbs_ir.encoding = {"dtype": "uint16", "_FillValue": 0, "scale_factor": 0.01}
     cpcir_data_n = cpcir_data_n.interp(time=time_steps.astype("datetime64[ns]"), method="nearest")
-    input_data = xr.load_dataset(path_native, group="input_data")
-    reference_data = xr.load_dataset(path_native, group="reference_data", mode="a")
-    input_data.to_netcdf(path_native, group="input_data")
-    reference_data.to_netcdf(path_native, group="reference_data", mode="a")
     cpcir_data_n.to_netcdf(path_native, group="geo_ir", mode="a")
 
 
