@@ -86,7 +86,7 @@ def find_goes_files(
 
 
 def add_goes_obs(
-        path_native: Path,
+        path_on_swath: Path,
         path_gridded: Path,
         n_steps: int = 4,
         sector: str = "full"
@@ -95,7 +95,7 @@ def add_goes_obs(
     Add GOES observations for extracted collocations.
 
     Args:
-        path_native: Path to the file containing the collocations extracted in native format.
+        path_on_swath: Path to the file containing the collocations extracted in on_swath format.
         path_gridded: Path to the file containing the collocations extract in gridded format.
         n_steps: The number 30 minute time steps to extract.
         sector: A string specifying whether to load the data the full disk or only the CONUS
@@ -103,7 +103,7 @@ def add_goes_obs(
     """
     time_step = np.timedelta64(15, "m")
 
-    time_str = path_native.name.split("_")[2][:-3]
+    time_str = path_on_swath.name.split("_")[2][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
     rounded = round_time(median_time, time_step)
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * time_step
@@ -124,9 +124,9 @@ def add_goes_obs(
         lats_g = data_gridded.latitude.data
         lat_min_g, lat_max_g = lats_g.min(), lats_g.max()
 
-    with xr.open_dataset(path_native, group="input_data") as data_native:
-        lons_n = data_native.longitude.data
-        lats_n = data_native.latitude.data
+    with xr.open_dataset(path_on_swath, group="input_data") as data_on_swath:
+        lons_n = data_on_swath.longitude.data
+        lats_n = data_on_swath.latitude.data
         lat_min, lat_max = lats_g.min(), lats_g.max()
 
     lons, lats = np.meshgrid(lons_g, lats_g)
@@ -189,14 +189,14 @@ def add_goes_obs(
     goes_data_n = xr.Dataset(
         {
             "observations": (
-                ("scans", "pixels", "time", "channel"),
+                ("scan", "pixel", "time", "channel"),
                 np.stack(goes_data_n, 2).astype(np.float32)
             ),
             "time": (("time",), times),
         }
     )
     goes_data_n.observations.encoding = {"dtype": "float32", "zlib": True}
-    goes_data_n.to_netcdf(path_native, group="geo", mode="a")
+    goes_data_n.to_netcdf(path_on_swath, group="geo", mode="a")
 
 
 
@@ -215,7 +215,7 @@ def cli(
     speed extract_goes collocation_path --n_steps N
 
     Extracts GOES-16 observations for all collocations found in 'collocation_path' in both gridded
-    and native projections. 'N' defines the number of half-hourly time steps centered on the
+    and on_swath projections. 'N' defines the number of half-hourly time steps centered on the
     median overpass time are extracted.
     """
     collocation_path = Path(collocation_path)
@@ -223,14 +223,14 @@ def cli(
         LOGGER.error("Provided collocation path must point to an existing directory.")
         return 1
 
-    files_native = sorted(list((collocation_path / "native").glob("*.nc")))
+    files_on_swath = sorted(list((collocation_path / "on_swath").glob("*.nc")))
     files_gridded = sorted(list((collocation_path / "gridded").glob("*.nc")))
 
-    times_native = {}
-    for f_native in files_native:
-        time_str = f_native.name.split("_")[2][:-3]
+    times_on_swath = {}
+    for f_on_swath in files_on_swath:
+        time_str = f_on_swath.name.split("_")[2][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
-        times_native[median_time] = f_native
+        times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
@@ -238,7 +238,7 @@ def cli(
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
-    combined = set(times_gridded.keys()).intersection(set(times_native.keys()))
+    combined = set(times_gridded.keys()).intersection(set(times_on_swath.keys()))
 
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
@@ -250,7 +250,7 @@ def cli(
         ):
             try:
                 add_goes_obs(
-                    times_native[median_time],
+                    times_on_swath[median_time],
                     times_gridded[median_time],
                     n_steps=n_steps
                 )
@@ -268,7 +268,7 @@ def cli(
         for median_time in combined:
             tasks.append(pool.submit(
                 add_goes_obs,
-                times_native[median_time],
+                times_on_swath[median_time],
                 times_gridded[median_time],
                 n_steps=n_steps
             ))

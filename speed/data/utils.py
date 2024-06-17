@@ -138,7 +138,7 @@ def get_useful_scan_range(
     Determine scan range containing valid reference data.
 
     Args:
-        data: A xarray.Dataset containing satellite observations in their native sampling.
+        data: A xarray.Dataset containing satellite observations in their on_swath sampling.
         reference_variable: The variable to use to determine scans with valid reference
         min_scans: The minimum name of scans in the returned range.
         margin: The number of scans by which to expand the valid scan range.
@@ -156,7 +156,7 @@ def get_useful_scan_range(
     return scan_start, scan_end
 
 
-def save_data_native(
+def save_data_on_swath(
     sensor_name: str,
     reference_data_name: str,
     preprocessor_data: xr.Dataset,
@@ -165,7 +165,7 @@ def save_data_native(
     min_scans: int = 96,
 ) -> None:
     """
-    Save collocations in native format.
+    Save collocations in on_swath format.
 
     Args:
         sensor_name: The name of the sensor that the input data stems from.
@@ -179,13 +179,13 @@ def save_data_native(
 
     """
     output_path = Path(output_path)
-    native_path = output_path / "native"
-    native_path.mkdir(exist_ok=True, parents=True)
+    on_swath_path = output_path / "on_swath"
+    on_swath_path.mkdir(exist_ok=True, parents=True)
 
     time = to_datetime(preprocessor_data.scan_time.mean().data)
     fname = time.strftime(f"{reference_data_name}_{sensor_name}_%Y%m%d%H%M%S.nc")
 
-    output_file = native_path / fname
+    output_file = on_swath_path / fname
     preprocessor_data.to_netcdf(output_file, group="input_data")
     reference_data.to_netcdf(output_file, group="reference_data", mode="a")
     return time
@@ -206,7 +206,7 @@ def save_data_gridded(
     Args:
         sensor_name: The name of the sensor that the input data stems from.
         reference_data_name: The name of reference data source.
-        time: The mean scan-time used to save the collocation in native
+        time: The mean scan-time used to save the collocation in on_swath
             format.
         preprocessor_data: A xarray.Dataset containing the retrieval input data
             from the preprocessor.
@@ -499,6 +499,7 @@ ANCILLARY_VARIABLES = [
     "snow_depth",
     "orographic_wind",
     "10m_wind",
+    "surface_type",
     "mountain_type",
     "land_fraction",
     "ice_fraction",
@@ -557,9 +558,7 @@ def save_input_data(
     output_path = path / "pmw"
     output_path.mkdir(exist_ok=True, parents=True)
 
-    input_data = input_data[["tbs_mw", "earth_incidence_angle"]].rename({
-        "tbs_mw": "observations"
-    })
+    input_data = input_data[["observations", "earth_incidence_angle"]]
     input_data.to_netcdf(output_path / filename)
 
 
@@ -593,7 +592,7 @@ def save_target_data(
         path: The base folder in which to store the extracted training
             scenes.
         bool: If True will include the swath coordinates of the input pixels
-            on the native sensor geometry allowing results to be efficiently
+            on the on_swath sensor geometry allowing results to be efficiently
             remapped to the gridded data.
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
@@ -691,19 +690,23 @@ def extract_scenes(
     reference_data = xr.load_dataset(collocation_file, group="reference_data")
     if include_geo:
         geo_data = xr.load_dataset(collocation_file, group="geo")
+        if "scans" in geo_data.dims:
+            geo_data = geo_data.rename(scans="scan", pixels="pixel")
     else:
         geo_data = None
 
     if include_geo_ir:
         geo_ir_data = xr.load_dataset(collocation_file, group="geo_ir")
+        if "scans" in geo_ir_data.dims:
+            geo_ir_data = geo_ir_data.rename(scans="scan", pixels="pixel")
     else:
         geo_ir_data = None
 
-    spatial_dims = input_data.tbs_mw.dims[:2]
+    spatial_dims = input_data.observations.dims[:2]
     n_rows = input_data[spatial_dims[0]].size
     n_cols = input_data[spatial_dims[1]].size
 
-    valid_input = np.any(np.isfinite(input_data.tbs_mw.data), -1)
+    valid_input = np.any(np.isfinite(input_data.observations.data), -1)
     valid_output = np.isfinite(reference_data.surface_precip.data)
     valid = valid_input * valid_output
 
@@ -794,46 +797,46 @@ def extract_scenes(
 
 def extract_evaluation_data(
         collocation_file_gridded: Path,
-        collocation_file_native: Path,
+        collocation_file_on_swath: Path,
         output_folder: Path,
         include_geo: bool = False,
         include_geo_ir: bool = False,
 ) -> None:
     """
     This function extract full collocation data from collocation file and stores it in the same
-    way 'extract_scenes' but keeps collocations in both gridded and native format.
+    way 'extract_scenes' but keeps collocations in both gridded and on_swath format.
 
     Args:
         collocation_file_gridded: A path pointing to a file containing a SPEED collocation
-            in native sampling.
+            in on_swath sampling.
         collocation_file_gridded: A path pointing to a file containing a SPEED collocation
             in regridded format.
         output_folder: The folder to which to write the extracted scenes.
         include_geo: If 'True', will extract GEO observations for all evaluation scenes.
         include_geo_ir: If 'True', will extract GEO IR observations for all evaluation scenes.
     """
-    time_str = collocation_file_native.name.split("_")[2][:-3]
+    time_str = collocation_file_on_swath.name.split("_")[2][:-3]
     time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
 
-    # Extract native data.
-    input_data = xr.load_dataset(collocation_file_native, group="input_data")
+    # Extract on_swath data.
+    input_data = xr.load_dataset(collocation_file_on_swath, group="input_data")
     input_data.attrs["pmw_input_file"] = input_data.attrs.pop("gpm_input_file")
-    reference_data = xr.load_dataset(collocation_file_native, group="reference_data")
-    save_ancillary_data(input_data, time, output_folder / "native")
-    save_input_data(input_data, time, output_folder / "native")
-    save_target_data(reference_data, time, output_folder / "native")
+    reference_data = xr.load_dataset(collocation_file_on_swath, group="reference_data")
+    save_ancillary_data(input_data, time, output_folder / "on_swath")
+    save_input_data(input_data, time, output_folder / "on_swath")
+    save_target_data(reference_data, time, output_folder / "on_swath")
     if include_geo:
-        geo_data = xr.load_dataset(collocation_file_native, group="geo")
-        save_geo_data(geo_data, time, output_folder / "native")
+        geo_data = xr.load_dataset(collocation_file_on_swath, group="geo")
+        save_geo_data(geo_data, time, output_folder / "on_swath")
     if include_geo_ir:
-        geo_ir_data = xr.load_dataset(collocation_file_native, group="geo_ir")
-        save_geo_ir_data(geo_ir_data, time, output_folder / "native")
+        geo_ir_data = xr.load_dataset(collocation_file_on_swath, group="geo_ir")
+        save_geo_ir_data(geo_ir_data, time, output_folder / "on_swath")
 
     pmw_input_file = input_data.attrs["pmw_input_file"]
 
     # Extract gridded data.
     input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
-    input_data.attrs["pmw_input_file"] = gpm_input_file
+    input_data.attrs["pmw_input_file"] = pmw_input_file
     reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
     save_ancillary_data(input_data, time, output_folder / "gridded")
     save_input_data(input_data, time, output_folder / "gridded")
@@ -877,7 +880,7 @@ def extract_training_data(
     valid_output = np.isfinite(reference_data.surface_precip.data)
 
     valid_input = np.zeros_like(valid_output)
-    valid_input += np.any(np.isfinite(input_data.tbs_mw.data), -1)
+    valid_input += np.any(np.isfinite(input_data.observations.data), -1)
 
     if include_geo:
         geo = xr.load_dataset(collocation_file, group="geo").transpose("time", "channel", ...)
@@ -901,6 +904,8 @@ def extract_training_data(
                 np.transpose(geo.observations.data[..., valid], (2, 0, 1))
             )
         }).reset_index(["time"])
+    else:
+        geo_data = None
 
     # GEO-IR data
     if geo_ir is not None:
@@ -908,11 +913,19 @@ def extract_training_data(
             "time": ("time", geo_ir.time.data),
             "observations": (("samples", "time"), geo_ir.observations.data[:, valid].transpose())
         }).reset_index(["time"])
+    else:
+        geo_ir_data = None
 
     ancillary_data = xr.Dataset({
         name: (("samples",), input_data[name].data[valid])
         for name in ANCILLARY_VARIABLES
     })
+    for name in ANCILLARY_VARIABLES:
+        array = ancillary_data[name]
+        if np.issubdtype(array.dtype, np.floating):
+            invalid = array < -9990
+            array.data[invalid] = np.nan
+            ancillary_data[name] = array.astype(np.float32)
 
     lats = input_data["latitude"]
     lons = input_data["longitude"]
@@ -926,9 +939,9 @@ def extract_training_data(
     ancillary_data["longitude"] = (("samples",), lons.data[valid])
 
     pmw_data = xr.Dataset({
-        name: (("samples", "channels"), input_data[name].data[valid])
-        for name in ["tbs_mw", "earth_incidence_angle"]
-    }).rename(tbs_mw="observations")
+        name: (("samples", "channel"), input_data[name].data[valid])
+        for name in ["observations", "earth_incidence_angle"]
+    })
 
     target_names = [
         "time",

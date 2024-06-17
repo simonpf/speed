@@ -41,7 +41,7 @@ import xarray as xr
 
 from speed.data.utils import (
     extract_scans,
-    save_data_native,
+    save_data_on_swath,
     save_data_gridded,
     calculate_grid_resample_indices,
     calculate_swath_resample_indices,
@@ -226,7 +226,7 @@ class GPMInput(InputData):
             reference_data: The reference data object to use to load the
                 reference data for the matched granules.
             output_folder: The base folder to which to write the extracted
-                collocations in native and gridded format.
+                collocations in on_swath and gridded format.
         """
         inpt_granule, ref_granules = match
         ref_granules = list(ref_granules)
@@ -357,12 +357,12 @@ class GPMInput(InputData):
         gpm_input_file = inpt_granule.file_record.filename
         preprocessor_data.attrs["gpm_input_file"] = gpm_input_file
 
-        # Save data in native format.
+        # Save data in on_swath format.
         LOGGER.info(
-            "Saving file in native format to %s.",
+            "Saving file in on_swath format to %s.",
             output_folder
         )
-        time = save_data_native(
+        time = save_data_on_swath(
             self.name,
             reference_data.name,
             preprocessor_data,

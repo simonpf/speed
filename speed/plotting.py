@@ -43,7 +43,7 @@ def add_ticks(ax, lons, lats, left=True, bottom=True):
     gl.ylocator = FixedLocator(lats)
 
 
-def plot_collocations_native(
+def plot_collocations_on_swath(
     collocation_file: Path,
     axs: Optional[np.ndarray] = None,
     tb_cmap: str = "cmo.thermal",
@@ -54,7 +54,7 @@ def plot_collocations_native(
     channel: int = 0,
 ) -> np.ndarray:
     """
-    Plot collocations in native format.
+    Plot collocations in on_swath format.
 
     Args:
         collocation_file: Path object pointing to location of SPEED

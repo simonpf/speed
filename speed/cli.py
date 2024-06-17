@@ -10,8 +10,10 @@ from datetime import datetime
 import logging
 import multiprocessing
 from pathlib import Path
+
+import numpy as np
 from rich.progress import track
-from typing import List
+from typing import List, Optional
 import xarray as xr
 
 import click
@@ -173,11 +175,13 @@ def extract_training_data_spatial(
 @click.argument("output_folder")
 @click.option("--include_geo", help="Include geo observations.", is_flag=True, default=False)
 @click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
+@click.option("--subsample", help="Subsample scenes from which data is extacted.", default=None, type=float)
 def extract_training_data_tabular(
         collocation_path: str,
         output_folder: str,
         include_geo: bool = False,
-        include_geo_ir: bool = False
+        include_geo_ir: bool = False,
+        subsample: Optional[float] = None
 ) -> int:
     """
     Extract tabular training data from collocations in COLLOCATION_PATH and write resulting files
@@ -203,6 +207,14 @@ def extract_training_data_tabular(
     geo_ir_data = []
     anc_data = []
     target_data = []
+
+    if subsample is not None:
+        np.random.seed(42)
+        collocation_files = np.random.choice(
+            collocation_files,
+            size=int(subsample * len(collocation_files)),
+            replace=False
+        )
 
     for collocation_file in track(collocation_files, description="Extracting tabular training data:"):
         try:
@@ -237,20 +249,68 @@ def extract_training_data_tabular(
             "_FillValue": 2e16 - 1
         }
     }
-    (output_folder / "pmw").mkdir(exist_ok=True)
+
+
+    sensor = collocation_file.name.split("_")[1]
+
+    # PMW data
+    encoding_pmw = {
+        "observations": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True},
+    }
+    (output_folder / sensor).mkdir(exist_ok=True)
     pmw_data.to_netcdf(
-        output_folder / "pmw" / "pmw.nc",
+        output_folder / sensor / f"{sensor}.nc",
+        encoding=encoding_pmw
     )
 
+    # Ancillary data
+    encoding_anc = {
+        "wet_bulb_temperature": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "two_meter_temperature": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "lapse_rate": {"dtype": "int16", "_FillValue": -1e15, "scale_factor": 0.01, "zlib": True},
+        "total_column_water_vapor": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 0.5, "zlib": True},
+        "surface_temperature": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "moisture_convergence": {"dtype": "float32", "zlib": True},
+        "leaf_area_index": {"dtype": "float32", "zlib": True},
+        "snow_depth": {"dtype": "float32", "zlib": True},
+        "orographic_wind": {"dtype": "float32", "zlib": True},
+        "10m_wind": {"dtype": "float32", "zlib": True},
+        "surface_type": {"dtype": "uint8", "zlib": True},
+        "mountain_type": {"dtype": "uint8", "zlib": True},
+        "quality_flag": {"dtype": "uint8", "zlib": True},
+        "land_fraction": {"dtype": "uint8", "zlib": True},
+        "ice_fraction": {"dtype": "uint8", "zlib": True},
+        "sunglint_angle": {"dtype": "int8", "_FillValue": 127, "zlib": True},
+        "airlifting_index": {"dtype": "uint8", "zlib": True},
+    }
 
     (output_folder / "ancillary").mkdir(exist_ok=True)
     ancillary_data.to_netcdf(
         output_folder / "ancillary" / "ancillary.nc",
+        encoding=encoding_anc
     )
+
+    # Target data
+    encoding_target = {
+        "surface_precip": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+    }
     (output_folder / "target").mkdir(exist_ok=True)
     target_data.to_netcdf(
         output_folder / "target" / "target.nc",
+        encoding=encoding_target
     )
+
+    encoding = {
+        "observations": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+    }
     if len(geo_data) > 0:
         geo_data = xr.concat(geo_data, dim="samples")
         (output_folder / "geo").mkdir(exist_ok=True)
@@ -297,14 +357,14 @@ def extract_evaluation_data(
         )
         return 1
 
-    files_native = sorted(list((collocation_path / "native").glob(glob_pattern)))
+    files_on_swath = sorted(list((collocation_path / "on_swath").glob(glob_pattern)))
     files_gridded = sorted(list((collocation_path / "gridded").glob(glob_pattern)))
 
-    times_native = {}
-    for f_native in files_native:
-        time_str = f_native.name.split("_")[2][:-3]
+    times_on_swath = {}
+    for f_on_swath in files_on_swath:
+        time_str = f_on_swath.name.split("_")[2][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
-        times_native[median_time] = f_native
+        times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
@@ -312,14 +372,14 @@ def extract_evaluation_data(
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
-    combined = set(times_gridded.keys()).intersection(set(times_native.keys()))
+    combined = set(times_gridded.keys()).intersection(set(times_on_swath.keys()))
 
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
     for median_time in track(combined, description="Extracting evaluation data:"):
         extract_evaluation_data(
             times_gridded[median_time],
-            times_native[median_time],
+            times_on_swath[median_time],
             output_folder,
             include_geo=include_geo,
             include_geo_ir=include_geo_ir
