@@ -241,12 +241,15 @@ def extract_training_data_tabular(
     ancillary_data = xr.concat(anc_data, dim="samples")
     target_data = xr.concat(target_data, dim="samples")
 
+    uint16_max = 2 ** 16 - 1
+    int16_min = 2 ** 15
+
     encoding = {
         "observations": {
             "zlib": True,
             "scale_factor": 0.01,
             "dtype": "uint16",
-            "_FillValue": 2e16 - 1
+            "_FillValue": uint16_max
         }
     }
 
@@ -255,7 +258,7 @@ def extract_training_data_tabular(
 
     # PMW data
     encoding_pmw = {
-        "observations": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
         "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True},
     }
     (output_folder / sensor).mkdir(exist_ok=True)
@@ -264,13 +267,14 @@ def extract_training_data_tabular(
         encoding=encoding_pmw
     )
 
+
     # Ancillary data
     encoding_anc = {
-        "wet_bulb_temperature": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
-        "two_meter_temperature": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "wet_bulb_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+        "two_meter_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
         "lapse_rate": {"dtype": "int16", "_FillValue": -1e15, "scale_factor": 0.01, "zlib": True},
         "total_column_water_vapor": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 0.5, "zlib": True},
-        "surface_temperature": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "surface_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
         "moisture_convergence": {"dtype": "float32", "zlib": True},
         "leaf_area_index": {"dtype": "float32", "zlib": True},
         "snow_depth": {"dtype": "float32", "zlib": True},
@@ -293,7 +297,7 @@ def extract_training_data_tabular(
 
     # Target data
     encoding_target = {
-        "surface_precip": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
         "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
         "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
         "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
@@ -309,7 +313,7 @@ def extract_training_data_tabular(
     )
 
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": 2e16-1, "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
     }
     if len(geo_data) > 0:
         geo_data = xr.concat(geo_data, dim="samples")
