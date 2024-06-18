@@ -558,12 +558,19 @@ def save_input_data(
     output_path = path / "pmw"
     output_path.mkdir(exist_ok=True, parents=True)
 
+    uint16_max = 2 ** 16 - 1
+    int16_min = 2 ** 15
+    encoding = {
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True},
+    }
     input_data = input_data[["observations", "earth_incidence_angle"]]
-    input_data.to_netcdf(output_path / filename)
+    input_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
 TARGET_VARIABLES = [
     "surface_precip",
+    "surface_precip_fpavg",
     "radar_quality_index",
     "gauge_correction_factor",
     "valid_fraction",
@@ -591,7 +598,7 @@ def save_target_data(
         time: The median time of the scene.
         path: The base folder in which to store the extracted training
             scenes.
-        bool: If True will include the swath coordinates of the input pixels
+        include_swath_coords: If True will include the swath coordinates of the input pixels
             on the on_swath sensor geometry allowing results to be efficiently
             remapped to the gridded data.
     """
@@ -607,8 +614,20 @@ def save_target_data(
             "scan_index",
             "pixel_index"
         ]
+
+    uint16_max = 2 ** 16 - 1
+    encoding = {
+        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+    }
     target_data = reference_data[target_variables]
-    target_data.to_netcdf(output_path / filename)
+    target_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
 def save_geo_data(
@@ -628,10 +647,13 @@ def save_geo_data(
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"geo_{date_str}.nc"
-
+    uint16_max = 2 ** 16 - 1
+    encoding = {
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+    }
     output_path = path / "geo"
     output_path.mkdir(exist_ok=True, parents=True)
-    geo_data.to_netcdf(output_path / filename)
+    geo_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
 def save_geo_ir_data(
@@ -651,11 +673,14 @@ def save_geo_ir_data(
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"geo_ir_{date_str}.nc"
-
+    uint16_max = 2 ** 16 - 1
+    encoding = {
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+    }
     output_path = path / "geo_ir"
     output_path.mkdir(exist_ok=True, parents=True)
     geo_ir_data = geo_ir_data.rename(tbs_ir="observations")
-    geo_ir_data.to_netcdf(output_path / filename)
+    geo_ir_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
 def extract_scenes(
@@ -815,12 +840,13 @@ def extract_evaluation_data(
         include_geo: If 'True', will extract GEO observations for all evaluation scenes.
         include_geo_ir: If 'True', will extract GEO IR observations for all evaluation scenes.
     """
-    time_str = collocation_file_on_swath.name.split("_")[2][:-3]
+    parts = collocation_file_on_swath.name.split("_")
+    time_str = parts[2][:-3]
     time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
 
     # Extract on_swath data.
     input_data = xr.load_dataset(collocation_file_on_swath, group="input_data")
-    input_data.attrs["pmw_input_file"] = input_data.attrs.pop("gpm_input_file")
+    input_data.attrs["gpm_input_file"] = input_data.attrs.pop("gpm_input_file")
     reference_data = xr.load_dataset(collocation_file_on_swath, group="reference_data")
     save_ancillary_data(input_data, time, output_folder / "on_swath")
     save_input_data(input_data, time, output_folder / "on_swath")
@@ -832,12 +858,20 @@ def extract_evaluation_data(
         geo_ir_data = xr.load_dataset(collocation_file_on_swath, group="geo_ir")
         save_geo_ir_data(geo_ir_data, time, output_folder / "on_swath")
 
-    pmw_input_file = input_data.attrs["pmw_input_file"]
+    surface_precip_fpavg = reference_data.surface_precip_fpavg
+    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    pixel_inds = reference_data.pixel_index
+    scan_inds = reference_data.scan_index
+    surface_precip_fpavg = surface_precip_fpavg[{"scans": scan_inds, "pixels": pixel_inds}]
+    invalid = scan_inds.data < 0
+    surface_precip_fpavg.data[invalid] = np.nan
+    reference_data["surface_precip_fpavg"] = surface_precip_fpavg
+
+    gpm_input_file = input_data.attrs["gpm_input_file"]
 
     # Extract gridded data.
     input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
-    input_data.attrs["pmw_input_file"] = pmw_input_file
-    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    input_data.attrs["gpm_input_file"] = gpm_input_file
     save_ancillary_data(input_data, time, output_folder / "gridded")
     save_input_data(input_data, time, output_folder / "gridded")
     save_target_data(
