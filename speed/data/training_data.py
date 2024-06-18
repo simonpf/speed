@@ -9,9 +9,11 @@ from pathlib import Path
 
 
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 import xarray as xr
 
+from .tiling import Tiler
 
 class SPEED2D():
     def __init__(
@@ -75,4 +77,33 @@ class SPEED2D():
                     x = np.transpose(x, (0, 2, 1))
                     y = np.transpose(y, (1, 0))
 
+        x = torch.tensor(x.copy())
+        y = torch.tensor(y.copy())
+
         return x, y
+
+
+class CollocationLoader:
+    """
+    Loads retrieval input data from the collocation files.
+    """
+
+    def __init__(self, path: Path, input_size, overlap=32):
+        self.path = path
+
+        with xr.open_dataset(path, group="input_data") as input_data:
+            tbs = np.transpose(input_data.tbs_mw.data, (2, 0, 1))
+        self.x = torch.tensor(tbs.astype("float32"))
+        self.tiler = Tiler(self.x, tile_size=input_size, overlap=overlap)
+
+    def __iter__(self) -> torch.Tensor:
+        """
+        Iterates over tiles and assembles results.
+        """
+        yield from self.tiler
+        #gen = iter(self.tiler)
+        #for tile in gen:
+        #    result = yield tile
+        #    print(result)
+        #    gen.send(result)
+        #return tile

@@ -6,6 +6,7 @@ This module contains functionality to add GOES 16 observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
+import gc
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -148,19 +149,22 @@ def add_goes_obs(
                     scene.load([f"C{ind:02}" for ind in range(1, 17)])
                     scene_g = scene.resample(grid, generate=False, cache_dir=tmp)
                 goes_obs = scene_g.to_xarray_dataset()
-                goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
+                goes_obs = np.stack([goes_obs[f"C{ind:02}"].astype(np.float32) for ind in range(1, 17)], -1)
                 goes_data_g.append(goes_obs)
+                del scene_g
+                gc.collect()
 
                 with warnings.catch_warnings():
                     scene_n = scene.resample(swath, generate=False, cache_dir=tmp)
                 goes_obs = scene_n.to_xarray_dataset()
-                goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
+                goes_obs = np.stack([goes_obs[f"C{ind:02}"].astype(np.float32) for ind in range(1, 17)], -1)
                 goes_data_n.append(goes_obs)
                 times.append(to_datetime64(recs[0].central_time.start))
 
-                del scene
-                del scene_g
                 del scene_n
+                del scene
+                gc.collect()
+
             finally:
                 logging.disable(logging.NOTSET)
 
@@ -238,7 +242,7 @@ def cli(
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
-    combined = set(times_gridded.keys()).intersection(set(times_on_swath.keys()))
+    combined = sorted(list(set(times_gridded.keys()).intersection(set(times_native.keys()))))
 
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
