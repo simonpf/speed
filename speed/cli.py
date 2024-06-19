@@ -253,7 +253,6 @@ def extract_training_data_tabular(
         }
     }
 
-
     sensor = collocation_file.name.split("_")[1]
 
     # PMW data
