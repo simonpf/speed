@@ -570,7 +570,7 @@ def save_input_data(
 
 TARGET_VARIABLES = [
     "surface_precip",
-    "surface_precip_fpavg",
+    #"surface_precip_fpavg",
     "radar_quality_index",
     "gauge_correction_factor",
     "valid_fraction",
@@ -858,14 +858,14 @@ def extract_evaluation_data(
         geo_ir_data = xr.load_dataset(collocation_file_on_swath, group="geo_ir")
         save_geo_ir_data(geo_ir_data, time, output_folder / "on_swath")
 
-    surface_precip_fpavg = reference_data.surface_precip_fpavg
-    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
-    pixel_inds = reference_data.pixel_index
-    scan_inds = reference_data.scan_index
-    surface_precip_fpavg = surface_precip_fpavg[{"scans": scan_inds, "pixels": pixel_inds}]
-    invalid = scan_inds.data < 0
-    surface_precip_fpavg.data[invalid] = np.nan
-    reference_data["surface_precip_fpavg"] = surface_precip_fpavg
+    #surface_precip_fpavg = reference_data.surface_precip_fpavg
+    #reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    #pixel_inds = reference_data.pixel_index
+    #scan_inds = reference_data.scan_index
+    #surface_precip_fpavg = surface_precip_fpavg[{"scans": scan_inds, "pixels": pixel_inds}]
+    #invalid = scan_inds.data < 0
+    #surface_precip_fpavg.data[invalid] = np.nan
+    #reference_data["surface_precip_fpavg"] = surface_precip_fpavg
 
     gpm_input_file = input_data.attrs["gpm_input_file"]
 
