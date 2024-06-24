@@ -6,6 +6,7 @@ Utility functions for data processing.
 """
 from copy import copy
 from datetime import datetime, timedelta
+import logging
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -17,6 +18,9 @@ from pansat import Granule
 from pyresample.geometry import SwathDefinition
 from pyresample import kd_tree
 import xarray as xr
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def get_smoothing_kernel(fwhm: float, grid_resolution: float) -> np.ndarray:
@@ -290,9 +294,9 @@ def save_data_gridded(
 
     output_file = gridded_path / fname
 
-    encoding = {var: {"zlib": True} for var in preprocessor_data}
+    encoding = {var: {"compression": "zstd"} for var in preprocessor_data}
     preprocessor_data.to_netcdf(output_file, group="input_data", encoding=encoding)
-    encoding = {var: {"zlib": True} for var in reference_data}
+    encoding = {var: {"compression": "zstd"} for var in reference_data}
     reference_data.to_netcdf(output_file, group="reference_data", mode="a", encoding=encoding)
 
 
@@ -538,6 +542,7 @@ def save_ancillary_data(
 
 
 def save_input_data(
+        sensor: str,
         input_data: xr.Dataset,
         time: datetime,
         path: Path
@@ -553,16 +558,16 @@ def save_input_data(
             scenes.
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
-    filename = f"pmw_{date_str}.nc"
+    filename = f"{sensor}_{date_str}.nc"
 
-    output_path = path / "pmw"
+    output_path = path / f"{sensor}"
     output_path.mkdir(exist_ok=True, parents=True)
 
     uint16_max = 2 ** 16 - 1
     int16_min = 2 ** 15
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "compression": "zstd"},
     }
     input_data = input_data[["observations", "earth_incidence_angle"]]
     input_data.to_netcdf(output_path / filename, encoding=encoding)
@@ -617,14 +622,14 @@ def save_target_data(
 
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
     }
     target_data = reference_data[target_variables]
     target_data.to_netcdf(output_path / filename, encoding=encoding)
@@ -649,7 +654,7 @@ def save_geo_data(
     filename = f"geo_{date_str}.nc"
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
     }
     output_path = path / "geo"
     output_path.mkdir(exist_ok=True, parents=True)
@@ -675,7 +680,7 @@ def save_geo_ir_data(
     filename = f"geo_ir_{date_str}.nc"
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
     }
     output_path = path / "geo_ir"
     output_path.mkdir(exist_ok=True, parents=True)
@@ -711,6 +716,7 @@ def extract_scenes(
         include_geo: If True, will try to extract GEO data for each training scene.
         include_geo_ir: If True, will try to extract GEO IR data for each training scene.
     """
+    sensor_name = collocation_file.name.split("_")[1]
     input_data = xr.load_dataset(collocation_file, group="input_data")
     reference_data = xr.load_dataset(collocation_file, group="reference_data")
     if include_geo:
@@ -791,7 +797,7 @@ def extract_scenes(
         time = to_datetime(time)
 
         save_ancillary_data(inpt, time, output_folder)
-        save_input_data(inpt, time, output_folder)
+        save_input_data(sensor_name, inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
         if geo_data is not None:
             save_geo_data(
@@ -826,6 +832,7 @@ def extract_evaluation_data(
         output_folder: Path,
         include_geo: bool = False,
         include_geo_ir: bool = False,
+        min_size: int = 256
 ) -> None:
     """
     This function extract full collocation data from collocation file and stores it in the same
@@ -839,18 +846,25 @@ def extract_evaluation_data(
         output_folder: The folder to which to write the extracted scenes.
         include_geo: If 'True', will extract GEO observations for all evaluation scenes.
         include_geo_ir: If 'True', will extract GEO IR observations for all evaluation scenes.
+        min_size: Scene below that size will be discarded.
     """
     parts = collocation_file_on_swath.name.split("_")
+    sensor_name = parts[1]
     time_str = parts[2][:-3]
     time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
 
-    # Extract on_swath data.
-    input_data = xr.load_dataset(collocation_file_on_swath, group="input_data")
-    input_data.attrs["gpm_input_file"] = input_data.attrs.pop("gpm_input_file")
-    reference_data = xr.load_dataset(collocation_file_on_swath, group="reference_data")
-    save_ancillary_data(input_data, time, output_folder / "on_swath")
-    save_input_data(input_data, time, output_folder / "on_swath")
-    save_target_data(reference_data, time, output_folder / "on_swath")
+
+    with xr.load_dataset(collocation_file_gridded, group="input_data") as input_data:
+        n_lats = input_data.sizes["latitude"]
+        n_lons = input_data.sizes["longitude"]
+    if n_lats < min_size or n_lons < min_size:
+        LOGGER.info(
+            "Skipping scene %s because it is smaller than 256 x 256 (%s x %s).",
+            time_str, n_lats, n_lons
+        )
+        return None
+
+    # Try and load geo and geo_ir data.
     if include_geo:
         geo_data = xr.load_dataset(collocation_file_on_swath, group="geo")
         save_geo_data(geo_data, time, output_folder / "on_swath")
@@ -858,10 +872,18 @@ def extract_evaluation_data(
         geo_ir_data = xr.load_dataset(collocation_file_on_swath, group="geo_ir")
         save_geo_ir_data(geo_ir_data, time, output_folder / "on_swath")
 
+    # Extract on_swath data.
+    input_data = xr.load_dataset(collocation_file_on_swath, group="input_data")
+    input_data.attrs["gpm_input_file"] = input_data.attrs.pop("gpm_input_file")
+    reference_data = xr.load_dataset(collocation_file_on_swath, group="reference_data")
+    save_ancillary_data(input_data, time, output_folder / "on_swath")
+    save_input_data(sensor_name, input_data, time, output_folder / "on_swath")
+    save_target_data(reference_data, time, output_folder / "on_swath")
+
     #surface_precip_fpavg = reference_data.surface_precip_fpavg
-    #reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
-    #pixel_inds = reference_data.pixel_index
-    #scan_inds = reference_data.scan_index
+    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    pixel_inds = reference_data.pixel_index
+    scan_inds = reference_data.scan_index
     #surface_precip_fpavg = surface_precip_fpavg[{"scans": scan_inds, "pixels": pixel_inds}]
     #invalid = scan_inds.data < 0
     #surface_precip_fpavg.data[invalid] = np.nan
@@ -873,20 +895,19 @@ def extract_evaluation_data(
     input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
     input_data.attrs["gpm_input_file"] = gpm_input_file
     save_ancillary_data(input_data, time, output_folder / "gridded")
-    save_input_data(input_data, time, output_folder / "gridded")
+    save_input_data(sensor_name, input_data, time, output_folder / "gridded")
     save_target_data(
         reference_data,
         time,
         output_folder / "gridded",
         include_swath_coords = True
     )
+    if include_geo:
+        geo_data = xr.load_dataset(collocation_file_gridded, group="geo")
+        save_geo_data(geo_data, time, output_folder / "gridded")
     if include_geo_ir:
         geo_ir_data = xr.load_dataset(collocation_file_gridded, group="geo_ir")
-        save_geo_ir_data(
-            geo_ir_data[{name: slc for name, slc in zip(spatial_dims, slices)}],
-            time,
-            output_folder / "gridded"
-        )
+        save_geo_ir_data(geo_ir_data, time, output_folder / "gridded")
 
 
 def extract_training_data(
@@ -913,17 +934,30 @@ def extract_training_data(
     reference_data = xr.load_dataset(collocation_file, group="reference_data")
     valid_output = np.isfinite(reference_data.surface_precip.data)
 
+    if "scan" in input_data.dims:
+        spatial_dims = ("scan", "pixel")
+    else:
+        spatial_dims = ("latitude", "longitude")
+
     valid_input = np.zeros_like(valid_output)
     valid_input += np.any(np.isfinite(input_data.observations.data), -1)
 
     if include_geo:
         geo = xr.load_dataset(collocation_file, group="geo").transpose("time", "channel", ...)
+        delta_t = (reference_data.time - geo.time).transpose("time", ...)
+        nearest_ind = np.argmin(np.abs(delta_t.data), axis=0)
+        geo = geo.drop_vars("time")
+        geo["nearest_ind"] = (spatial_dims, nearest_ind.astype(np.uint8))
     else:
         geo = None
 
     if include_geo_ir:
         geo_ir = xr.load_dataset(collocation_file, group="geo_ir")
         geo_ir = geo_ir.rename(tbs_ir="observations")
+        delta_t = (reference_data.time - geo_ir.time).transpose("time", ...)
+        nearest_ind = np.argmin(np.abs(delta_t.data), axis=0)
+        geo_ir = geo_ir.drop_vars("time")
+        geo_ir["nearest_ind"] = (spatial_dims, nearest_ind.astype(np.uint8))
     else:
         geo_ir = None
 
@@ -932,21 +966,22 @@ def extract_training_data(
     # GEO data
     if geo is not None:
         geo_data = xr.Dataset({
-            "time": ("time", geo.time.data),
             "observations": (
-                ("samples", "time", "channel"),
-                np.transpose(geo.observations.data[..., valid], (2, 0, 1))
+                ("samples", "time", "channel"), np.transpose(geo.observations.data[..., valid], (2, 0, 1))
+            ),
+            "nearest_time_step": (
+                ("samples"), np.transpose(geo.nearest_ind.data[..., valid]).transpose()
             )
-        }).reset_index(["time"])
+        })
     else:
         geo_data = None
 
     # GEO-IR data
     if geo_ir is not None:
         geo_ir_data = xr.Dataset({
-            "time": ("time", geo_ir.time.data),
-            "observations": (("samples", "time"), geo_ir.observations.data[:, valid].transpose())
-        }).reset_index(["time"])
+            "observations": (("samples", "time"), geo_ir.observations.data[:, valid].transpose()),
+            "nearest_ind": (("samples"), geo_ir.nearest_ind.data[valid].transpose())
+        })
     else:
         geo_ir_data = None
 

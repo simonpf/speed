@@ -108,7 +108,7 @@ def add_goes_obs(
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
     rounded = round_time(median_time, time_step)
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * time_step
-    time_steps = rounded - offsets
+    time_steps = rounded + offsets
 
     if sector.lower() == "conus":
         products = [GOES16L1BRadiances("C", channel) for channel in range(1, 17)]

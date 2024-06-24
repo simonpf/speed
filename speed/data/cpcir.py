@@ -42,7 +42,7 @@ def add_cpcir_obs(
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
     rounded = round_time(median_time, np.timedelta64(30, "m"))
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * np.timedelta64("30", "m")
-    time_steps = rounded - offsets
+    time_steps = rounded + offsets
     cpcir_recs = merged_ir.get(TimeRange(time_steps.min(), time_steps.max()))
 
     with xr.open_dataset(path_gridded, group="input_data") as data_gridded:
@@ -86,10 +86,12 @@ def add_cpcir_obs(
 
     # Save data in gridded format.
     cpcir_data_g = xr.concat(cpcir_data_g, "time").sortby("time").rename({"Tb": "tbs_ir"})
+    cpcir_data_g = cpcir_data_g.interp(time=time_steps, method="nearest")
     cpcir_data_g.to_netcdf(path_gridded, group="geo_ir", mode="a")
 
     # Save data in gridded format.
     cpcir_data_n = xr.concat(cpcir_data_n, "time").sortby("time").rename({"Tb": "tbs_ir"})
+    cpcir_data_n = cpcir_data_g.interp(time=time_steps, method="nearest")
     cpcir_data_n.to_netcdf(path_on_swath, group="geo_ir", mode="a")
 
 
