@@ -121,6 +121,11 @@ def extract_data(
 )
 @click.option("--include_geo", help="Include GEO observations.", is_flag=True, default=False)
 @click.option("--include_geo_ir", help="Include geo IR observations.", is_flag=True, default=False)
+@click.option(
+    "--n_processes",
+    help="The number of processes to use for the data extraction.",
+    default=1
+)
 def extract_training_data_spatial(
         collocation_path: str,
         output_folder: str,
@@ -128,7 +133,8 @@ def extract_training_data_spatial(
         size: int = 256,
         min_input_frac: float = None,
         include_geo: bool = False,
-        include_geo_ir: bool = False
+        include_geo_ir: bool = False,
+        n_processes: int = 1
 ) -> int:
     """
     Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes
@@ -148,24 +154,47 @@ def extract_training_data_spatial(
 
 
     collocation_files = sorted(list(collocation_path.glob("*.nc")))
-    for collocation_file in track(collocation_files, "Extracting spatial training data:"):
 
-        sensor_name = collocation_file.name.split("_")[1]
-
-        try:
-            extract_scenes(
+    if n_processes < 2:
+        for collocation_file in track(collocation_files, "Extracting spatial training data:"):
+            try:
+                extract_scenes(
+                    collocation_file,
+                    output_folder,
+                    overlap=overlap,
+                    size=size,
+                    include_geo=include_geo,
+                    include_geo_ir=include_geo_ir,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Encountered an error when processing file %s.",
+                    collocation_file
+                )
+    else:
+        pool = ProcessPoolExecutor(max_workers=n_processes)
+        manager = multiprocessing.Manager()
+        tasks = {}
+        for collocation_file in collocation_files:
+            task = pool.submit(
+                extract_scenes,
                 collocation_file,
                 output_folder,
                 overlap=overlap,
                 size=size,
                 include_geo=include_geo,
-                include_geo_ir=include_geo_ir,
+                include_geo_ir=include_geo_ir
             )
-        except Exception:
-            LOGGER.exception(
-                "Encountered an error when processing file %s.",
-                collocation_file
-            )
+            tasks[task] = collocation_file
+
+        for task in track(tasks, "Extracting spatial training data:"):
+            try:
+                task.result()
+            except Exception as exc:
+                LOGGER.exception(
+                    "Encountered an error processing target file %s.",
+                    collocation_file
+                )
 
     return 1
 
@@ -246,7 +275,7 @@ def extract_training_data_tabular(
 
     encoding = {
         "observations": {
-            "zlib": True,
+            "compression": "zstd",
             "scale_factor": 0.01,
             "dtype": "uint16",
             "_FillValue": uint16_max
@@ -257,8 +286,8 @@ def extract_training_data_tabular(
 
     # PMW data
     encoding_pmw = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2**15), "scale_factor": 0.01, "compression": "zstd"},
     }
     (output_folder / sensor).mkdir(exist_ok=True)
     pmw_data.to_netcdf(
@@ -269,23 +298,23 @@ def extract_training_data_tabular(
 
     # Ancillary data
     encoding_anc = {
-        "wet_bulb_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "two_meter_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "lapse_rate": {"dtype": "int16", "_FillValue": -1e15, "scale_factor": 0.01, "zlib": True},
-        "total_column_water_vapor": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 0.5, "zlib": True},
-        "surface_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "moisture_convergence": {"dtype": "float32", "zlib": True},
-        "leaf_area_index": {"dtype": "float32", "zlib": True},
-        "snow_depth": {"dtype": "float32", "zlib": True},
-        "orographic_wind": {"dtype": "float32", "zlib": True},
-        "10m_wind": {"dtype": "float32", "zlib": True},
-        "surface_type": {"dtype": "uint8", "zlib": True},
-        "mountain_type": {"dtype": "uint8", "zlib": True},
-        "quality_flag": {"dtype": "uint8", "zlib": True},
-        "land_fraction": {"dtype": "uint8", "zlib": True},
-        "ice_fraction": {"dtype": "uint8", "zlib": True},
-        "sunglint_angle": {"dtype": "int8", "_FillValue": 127, "zlib": True},
-        "airlifting_index": {"dtype": "uint8", "zlib": True},
+        "wet_bulb_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "two_meter_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "lapse_rate": {"dtype": "int16", "_FillValue": -1e15, "scale_factor": 0.01, "compression": "zstd"},
+        "total_column_water_vapor": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 0.5, "compression": "zstd"},
+        "surface_temperature": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "moisture_convergence": {"dtype": "float32", "compression": "zstd"},
+        "leaf_area_index": {"dtype": "float32", "compression": "zstd"},
+        "snow_depth": {"dtype": "float32", "compression": "zstd"},
+        "orographic_wind": {"dtype": "float32", "compression": "zstd"},
+        "10m_wind": {"dtype": "float32", "compression": "zstd"},
+        "surface_type": {"dtype": "uint8", "compression": "zstd"},
+        "mountain_type": {"dtype": "uint8", "compression": "zstd"},
+        "quality_flag": {"dtype": "uint8", "compression": "zstd"},
+        "land_fraction": {"dtype": "uint8", "compression": "zstd"},
+        "ice_fraction": {"dtype": "uint8", "compression": "zstd"},
+        "sunglint_angle": {"dtype": "int8", "_FillValue": 127, "compression": "zstd"},
+        "airlifting_index": {"dtype": "uint8", "compression": "zstd"},
     }
 
     (output_folder / "ancillary").mkdir(exist_ok=True)
@@ -296,14 +325,14 @@ def extract_training_data_tabular(
 
     # Target data
     encoding_target = {
-        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
-        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
-        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True},
+        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
     }
     (output_folder / "target").mkdir(exist_ok=True)
     target_data.to_netcdf(
@@ -312,7 +341,7 @@ def extract_training_data_tabular(
     )
 
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
     }
     if len(geo_data) > 0:
         geo_data = xr.concat(geo_data, dim="samples")
@@ -380,13 +409,20 @@ def extract_evaluation_data(
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
     for median_time in track(combined, description="Extracting evaluation data:"):
-        extract_evaluation_data(
-            times_gridded[median_time],
-            times_on_swath[median_time],
-            output_folder,
-            include_geo=include_geo,
-            include_geo_ir=include_geo_ir
-        )
+        try:
+            extract_evaluation_data(
+                times_gridded[median_time],
+                times_on_swath[median_time],
+                output_folder,
+                include_geo=include_geo,
+                include_geo_ir=include_geo_ir
+            )
+        except Exception:
+            LOGGER.exception(
+                "Encountered an error when processing validation scene %s.",
+                median_time
+            )
+
 
 
 
