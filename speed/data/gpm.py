@@ -484,4 +484,4 @@ AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
 amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)
 
 ATMS_PRODUCTS = [l1c_noaa20_atms]
-atms = GPMInput("atms", AMSR2_PRODUCTS, radius_of_influence=64e3)
+atms = GPMInput("atms", ATMS_PRODUCTS, radius_of_influence=64e3)
