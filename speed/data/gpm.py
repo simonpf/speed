@@ -24,6 +24,7 @@ from pansat.products.satellite.gpm import (
     l1c_metopc_mhs,
     l1c_noaa18_mhs,
     l1c_noaa19_mhs,
+    l1c_noaa20_atms,
     l1c_gcomw1_amsr2,
     l1c_tropics03_tms,
     l1c_tropics06_tms,
@@ -481,3 +482,6 @@ gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=0.98, radius_of_influence=15e3
 
 AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
 amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)
+
+ATMS_PRODUCTS = [l1c_noaa20_atms]
+atms = GPMInput("atms", AMSR2_PRODUCTS, radius_of_influence=64e3)
