@@ -204,10 +204,12 @@ def add_goes_obs(
 @click.argument("collocation_path", type=str)
 @click.option("--n_steps", type=int, default=8)
 @click.option("--n_processes", type=int, default=1)
+@click.option("--pattern", type=str, default="*.nc")
 def cli(
         collocation_path: str,
         n_steps: int = 8,
-        n_processes: int = 1
+        n_processes: int = 1,
+        pattern: str = "*.nc"
 ):
     """
     Extract GOES observations matching GPM collocations.
@@ -223,8 +225,8 @@ def cli(
         LOGGER.error("Provided collocation path must point to an existing directory.")
         return 1
 
-    files_on_swath = sorted(list((collocation_path / "on_swath").glob("*.nc")))
-    files_gridded = sorted(list((collocation_path / "gridded").glob("*.nc")))
+    files_on_swath = sorted(list((collocation_path / "on_swath").glob(pattern)))
+    files_gridded = sorted(list((collocation_path / "gridded").glob(pattern)))
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:

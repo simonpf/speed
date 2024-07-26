@@ -471,9 +471,17 @@ class MRMS(ReferenceData):
         input_data = input_granule.open()
         if "latitude_s1" in input_data:
             input_data = input_data.rename(
+                scans="scan",
+                pixels_s2="pixel",
                 latitude_s1="latitude",
                 longitude_s1="longitude"
             )
+        else:
+            input_data = input_data.rename(
+                scans="scan",
+                pixels="pixel",
+            )
+
         input_data = input_data[[
             "scan_time",
             "latitude",
