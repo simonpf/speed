@@ -98,7 +98,11 @@ class Combined(ReferenceData):
         self.include_mirs = include_mirs
 
     def load_reference_data(
-        self, input_granule: Granule, granules: List[Granule]
+        self,
+        input_granule: Granule,
+        granules: List[Granule],
+        radius_of_influence: float,
+        beam_width: Optional[float]
     ) -> Optional[xr.Dataset]:
         """
         Load reference data for a given granule of GPM CMB data.
@@ -214,7 +218,7 @@ class Combined(ReferenceData):
         cols = np.where((lon_min <= lons) * (lon_max >= lons))[0]
         col_start = cols.min()
         col_end = cols.max()
-        assert col_end - col_start < 2000
+        assert col_end - col_start < 3500
 
         lat_min = cmb_data.latitude.data.min()
         lat_max = cmb_data.latitude.data.max()
