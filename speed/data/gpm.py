@@ -299,7 +299,6 @@ class GPMInput(InputData):
             )
             return None
 
-
         reference_data_r = ref_data.interp(
             latitude=preprocessor_data.latitude,
             longitude=preprocessor_data.longitude,

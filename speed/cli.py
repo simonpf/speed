@@ -61,6 +61,7 @@ def extract_data(
     import speed.data.mrms
     import speed.data.gpm_gv
     import speed.data.combined
+    import speed.data.noaa
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:

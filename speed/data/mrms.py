@@ -571,6 +571,10 @@ class MRMS(ReferenceData):
         )
         mrms_data_d, _ = downsample_mrms_data(mrms_data, grid=grid)
 
+        # Don't calculate footprint averages if beam width is None
+        if beam_width is None:
+            return mrms_data_d, None
+
         latitudes = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
         longitudes = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
         sensor_latitude = input_data.spacecraft_latitude
