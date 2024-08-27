@@ -90,7 +90,7 @@ def add_goes_obs(
         path_gridded: Path,
         n_steps: int = 4,
         sector: str = "full"
-):
+) -> None:
     """
     Add GOES observations for extracted collocations.
 

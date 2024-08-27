@@ -569,7 +569,12 @@ def save_input_data(
         "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
         "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "compression": "zstd"},
     }
-    input_data = input_data[["observations", "earth_incidence_angle"]]
+    vars = [
+        var for var in ["observations", "earth_incidence_angle"]
+        if var in input_data
+    ]
+    encoding = {var: encoding[var] for var in vars}
+    input_data = input_data[vars]
     input_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
@@ -584,7 +589,13 @@ TARGET_VARIABLES = [
     "hail_fraction",
     "convective_fraction",
     "stratiform_fraction",
-    "time"
+    "time",
+    "precipitation_type",
+    "rain_water_content",
+    "total_water_content",
+    "rain_water_path",
+    "snow_water_path",
+    "latent_heating"
 ]
 
 
@@ -613,7 +624,9 @@ def save_target_data(
     output_path = path / "target"
     output_path.mkdir(exist_ok=True, parents=True)
 
-    target_variables = copy(TARGET_VARIABLES)
+    target_variables = [
+        var for var in TARGET_VARIABLES if var in reference_data
+    ]
     if include_swath_coords:
         target_variables += [
             "scan_index",
@@ -630,8 +643,17 @@ def save_target_data(
         "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
         "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
         "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
+        "precipitation_type": {"dtype": "int8", "compression": "zstd"},
+        "total_water_content": {"dtype": "float32", "compression": "zstd"},
+        "rain_water_content": {"dtype": "float32", "compression": "zstd"},
+        "total_water_content": {"dtype": "float32", "compression": "zstd"},
+        "rain_water_path": {"dtype": "float32", "compression": "zstd"},
+        "snow_water_path": {"dtype": "float32", "compression": "zstd"},
+        "latent_heating": {"dtype": "float32"}
     }
+
     target_data = reference_data[target_variables]
+    encoding = {var: encoding[var] for var in target_variables if var in encoding}
     target_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
@@ -796,7 +818,7 @@ def extract_scenes(
         time = scan_times[0] + np.median(scan_times - scan_times[0])
         time = to_datetime(time)
 
-        save_ancillary_data(inpt, time, output_folder)
+        #save_ancillary_data(inpt, time, output_folder)
         save_input_data(sensor_name, inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
         if geo_data is not None:
@@ -849,8 +871,8 @@ def extract_evaluation_data(
         min_size: Scene below that size will be discarded.
     """
     parts = collocation_file_on_swath.name.split("_")
-    sensor_name = parts[1]
-    time_str = parts[2][:-3]
+    sensor_name = parts[-2]
+    time_str = parts[-1][:-3]
     time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
 
 
@@ -1154,9 +1176,10 @@ def calculate_footprint_averages(
     sensor_altitudes, _ = xr.broadcast(sensor_altitudes, latitudes)
 
     sensor_dims = sensor_latitudes.dims[:2]
+    spatial_dims = data.latitude.ndim
     results = {
         var: (
-            (sensor_dims + data[var].dims[:2])[:data[var].data.ndim],
+            (sensor_dims + data[var].dims[:2])[:2 + data[var].data.ndim - spatial_dims],
             np.nan * np.zeros(latitudes.shape + data[var].shape[2:], dtype=data[var].dtype)
         ) for var in data if var != "time"
     }
@@ -1197,7 +1220,10 @@ def calculate_footprint_averages(
         lon_range = np.abs(lons_data - lon_p) < 0.5 * area_of_influence
         lat_range = np.abs(lats_data - lat_p) < 0.5 * area_of_influence
 
-        data_fp = data[{"longitude": lon_range, "latitude": lat_range}]
+        if "longitude" in data.dims:
+            data_fp = data[{"longitude": lon_range, "latitude": lat_range}]
+        else:
+            data_fp = data[{data.surface_precip.dims[0]: lon_range * lat_range}]
 
         lons_d = data_fp.longitude.data
         lats_d = data_fp.latitude.data

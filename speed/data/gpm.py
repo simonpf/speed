@@ -216,6 +216,7 @@ class GPMInput(InputData):
         match: Tuple[Granule, List[Granule]],
         reference_data: ReferenceData,
         output_folder: Path,
+        min_area: float = 0.0
     ) -> None:
         """
         Extract collocations from matched input and reference data.
@@ -228,6 +229,8 @@ class GPMInput(InputData):
                 reference data for the matched granules.
             output_folder: The base folder to which to write the extracted
                 collocations in on_swath and gridded format.
+            min_area: A minimum area in square degree below which collocations
+                are discarded.
         """
         inpt_granule, ref_granules = match
         ref_granules = list(ref_granules)
@@ -263,12 +266,13 @@ class GPMInput(InputData):
         ref_geom = ref_granules[0].geometry.to_shapely()
         gpm_geom = inpt_granule.geometry.to_shapely()
         area = ref_geom.intersection(gpm_geom).area
-        if area < 25:
+        if area < min_area:
             LOGGER.info(
                 "Discarding match between '%s' and '%s' because area "
-                " is less than 25 square degree.",
+                " is less than %s square degree.",
                 inpt_granule.file_record.product.name,
                 reference_data.pansat_product.name,
+                min_area
             )
             return None
 
@@ -337,7 +341,7 @@ class GPMInput(InputData):
             surface_precip = reference_data_r.surface_precip.data
         else:
             surface_precip = reference_data_r.surface_precip_combined.data
-        if np.isfinite(surface_precip).sum() < 50:
+        if np.isfinite(surface_precip).sum() < 1:
             LOGGER.info(
                 "Skipping match because it contains only %s valid "
                 " surface precip pixels.",
@@ -395,6 +399,7 @@ class GPMInput(InputData):
             preprocessor_data_r,
             ref_data,
             output_folder,
+            min_size=256
         )
 
     def process_day(
@@ -404,6 +409,7 @@ class GPMInput(InputData):
         day: int,
         reference_data: ReferenceData,
         output_folder: Path,
+        min_area: float = 5
     ):
         """
         Process all collocations available on a given day.
@@ -416,6 +422,8 @@ class GPMInput(InputData):
                 reference data source.
             output_folder: The folder to which to write the extracted
                 collocations.
+            min_area: A minimum area in square degree below which collocations
+                are discarded.
         """
         start_time = datetime(year, month, day)
         end_time = start_time + timedelta(days=1)

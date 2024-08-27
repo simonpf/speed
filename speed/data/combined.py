@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 from tempfile import TemporaryDirectory
 
+from filelock import FileLock
 from gprof_nn.data.l1c import L1CFile
 import numpy as np
 from pansat import Granule
@@ -146,6 +147,7 @@ class Combined(ReferenceData):
                 "precip_liq_water_cont",
                 "cloud_ice_water_cont",
                 "cloud_liq_water_cont",
+                "scan_time"
             ]
             cmb_data = granule.open()[cmb_vars].rename(
                 {
@@ -154,9 +156,7 @@ class Combined(ReferenceData):
                     "precip_liq_water_cont": "rain_water_content",
                     "cloud_ice_water_cont": "ice_water_content",
                     "cloud_liq_water_cont": "liquid_water_content"
-                }
-            )
-
+                })
             profiles = [
                 "total_water_content",
                 "rain_water_content",
@@ -178,22 +178,35 @@ class Combined(ReferenceData):
             cmb_data["ice_water_path"] = cmb_data["ice_water_content"].integrate("vertical_bins")
             cmb_data["liquid_water_path"] = cmb_data["liquid_water_content"].integrate("vertical_bins")
 
+            cmb_type = cmb_data["precipitation_type"].data.astype("int64")
+            precip_type = np.zeros_like(cmb_type, dtype="uint")
+            precip_type[cmb_type == -1111] = 1
+            precip_type[cmb_type // 10_000_000 == 1] = 2
+            precip_type[cmb_type // 10_000_000 == 2] = 3
+            precip_type[cmb_type // 10_000_000 == 3] = 4
+
+            cmb_data["precipitation_type"] = (
+                list(cmb_data["precipitation_type"].dims),
+                precip_type
+            )
             target_levels = np.concatenate([0.25 * np.arange(20) + 0.25, 10.5 + np.arange(8)])
             cmb_data = cmb_data.interp(vertical_bins=target_levels)
 
-            slh_recs = l2a_gpm_dpr_slh.get(granule.time_range)
-            if len(slh_recs) > 0:
-                scan_start, scan_end = granule.primary_index_range
-                slh_data = l2a_gpm_dpr_slh.open(slh_recs[0])[{"scans": slice(scan_start, scan_end)}]
-                slh_data = slh_data[["latent_heating"]].rename({
-                    "scans": "matched_scans",
-                    "pixels": "matched_pixels"
-                })
-                slh_data["latent_heating"].data[:] = slh_data.latent_heating.data[..., ::-1]
-                slh_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(80))
-                slh = slh_data.latent_heating.interp(vertical_bins=target_levels)
-            else:
-                slh = xr.DataArray(np.zeros_like(swc.data), dims=("scans", "pixels", "vertical_bins"))
+            lock = FileLock("slh.lock")
+            with lock:
+                slh_recs = l2a_gpm_dpr_slh.get(granule.time_range)
+                if len(slh_recs) > 0:
+                    scan_start, scan_end = granule.primary_index_range
+                    slh_data = l2a_gpm_dpr_slh.open(slh_recs[0])[{"scans": slice(scan_start, scan_end)}]
+                    slh_data = slh_data[["latent_heating"]].rename({
+                        "scans": "matched_scans",
+                        "pixels": "matched_pixels"
+                    })
+                    slh_data["latent_heating"].data[:] = slh_data.latent_heating.data
+                    slh_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(80))
+                    slh = slh_data.latent_heating.interp(vertical_bins=target_levels)
+                else:
+                    slh = xr.DataArray(np.zeros_like(swc.data), dims=("scans", "pixels", "vertical_bins"))
 
             cmb_data["latent_heating"] = slh
             results_cmb.append(cmb_data)
@@ -232,9 +245,10 @@ class Combined(ReferenceData):
         )
 
         grid = GLOBAL.grid[row_start: row_end, col_start:col_end]
+        cmb_data["time"], _ = xr.broadcast(cmb_data.scan_time, cmb_data.latitude)
 
         data_r = resample_data(cmb_data, grid, 5e3)
-        data_r.attrs["cmb_files"] = ",".join(str(cmb_filenames))
+        data_r.attrs["input_files"] = ",".join(cmb_filenames)
 
         if self.include_mirs:
 
@@ -254,7 +268,31 @@ class Combined(ReferenceData):
         data_r.attrs["lower_left_col"] = col_start
         data_r.attrs["lower_left_row"] = row_start
 
-        return data_r
+        float_encoding = {"dtype": "float32", "compression": "zstd"}
+        int_encoding = {"dtype": "int8", "compression": "zstd"}
+
+        float_vars = [
+            "surface_precip",
+            "total_water_content",
+            "rain_water_content",
+            "ice_water_content",
+            "liquid_water_content",
+            "snow_water_path",
+            "rain_water_path",
+            "ice_water_path",
+            "liquid_water_path",
+            "latent_heating"
+        ]
+        for var in float_vars:
+            data_r[var].encoding = float_encoding
+        data_r["precipitation_type"].encoding = int_encoding
+
+        if beam_width is None:
+            return data_r, None
+
+        raise RuntimeError(
+            "Calculation of footprint-averaged results not yet supported."
+        )
 
 
 gpm_cmb = Combined("cmb", include_mirs=False)

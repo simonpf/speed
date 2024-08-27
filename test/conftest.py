@@ -14,9 +14,11 @@ from pansat.catalog.index import find_matches
 from pansat.products.ground_based import mrms, gpm_gv
 from pansat.products.satellite.gpm import (
     l1c_r_gpm_gmi,
+    l1c_noaa20_atms,
     l1c_gcomw1_amsr2,
     l2b_gpm_cmb
 )
+from pansat.products.stations import wegener_net
 
 from speed.data.gpm import run_preprocessor
 
@@ -80,8 +82,8 @@ def cmb_match(scope="session"):
     end_time = "2020-01-02T00:12:00"
     time_range = TimeRange(start_time, end_time)
     cmb_index = get_index(l2b_gpm_cmb).subset(time_range)
-    gmi_index = get_index(l1c_r_gpm_gmi).subset(time_range)
-    matches = find_matches(gmi_index, cmb_index)
+    atms_index = get_index(l1c_noaa20_atms).subset(time_range)
+    matches = find_matches(atms_index, cmb_index)
     return matches[0]
 
 
@@ -130,3 +132,18 @@ def mhs_conus_granule():
 def preprocessor_data(mhs_conus_granule):
      preprocessor_data = run_preprocessor(mhs_conus_granule)
      return preprocessor_data
+
+
+@pytest.fixture
+def wegener_net_match(scope="session"):
+    """
+    Returns a tuple describing a matche between a GMI granule and Wegener net
+    data.
+    """
+    start_time = "2023-07-02T00:00:00"
+    end_time = "2023-07-03T00:00:00"
+    time_range = TimeRange(start_time, end_time)
+    gmi_index = get_index(l1c_r_gpm_gmi).subset(time_range)
+    wn_index = get_index(wegener_net.station_data).subset(time_range)
+    matches = find_matches(gmi_index, wn_index)
+    return matches[0]

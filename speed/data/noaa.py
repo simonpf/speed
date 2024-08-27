@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 
+from filelock import FileLock
 import pansat
 from pansat import FileRecord, TimeRange, Granule
 from pansat.environment import get_index
@@ -73,16 +74,43 @@ def load_brightness_temperatures(
     sc_lon = l1b_data.spacecraft_longitude.data
     sc_lat = l1b_data.spacecraft_latitude.data
     sc_alt = l1b_data.spacecraft_altitude.data
-
     tbs = np.concatenate((tbs_s1, tbs_s2, tbs_s3), axis=-1)
+    scan_time = l1b_data.scan_time.data
+
+    # Upsample fields
+    n_scans, n_pixels, n_channels = tbs.shape
+
+    lons_hr = np.zeros_like(lons, shape=(2 * n_scans - 1, n_pixels))
+    lons_hr[::2] = lons
+    lons_hr[1::2] = 0.5 * (lons[:-1] + lons[1:])
+    lats_hr = np.zeros_like(lats, shape=(2 * n_scans - 1, n_pixels))
+    lats_hr[::2] = lats
+    lats_hr[1::2] = 0.5 * (lats[:-1] + lats[1:])
+    tbs_hr = np.zeros_like(tbs, shape=(2 * n_scans - 1, n_pixels, n_channels))
+    tbs_hr[::2] = tbs
+    tbs_hr[1::2] = 0.5 * (tbs[:-1] + tbs[1:])
+    scan_time_hr = np.zeros_like(scan_time, shape=(2 * n_scans - 1))
+    scan_time_hr[::2] = scan_time
+    scan_time_hr[1::2] = scan_time[1:] + 0.5 * (scan_time[1:] - scan_time[:-1])
+
+    sc_lon_hr = np.zeros_like(sc_lon, shape=(2 * n_scans - 1))
+    sc_lon_hr[::2] = sc_lon
+    sc_lon_hr[1::2] = 0.5 * (sc_lon[:-1] + sc_lon[1:])
+    sc_lat_hr = np.zeros_like(sc_lat, shape=(2 * n_scans - 1))
+    sc_lat_hr[::2] = sc_lat
+    sc_lat_hr[1::2] = 0.5 * (sc_lat[:-1] + sc_lat[1:])
+    sc_alt_hr = np.zeros_like(sc_alt, shape=(2 * n_scans - 1))
+    sc_alt_hr[::2] = sc_alt
+    sc_alt_hr[1::2] = 0.5 * (sc_alt[:-1] + sc_alt[1:])
 
     return xr.Dataset({
-        "latitude": (("scan", "pixel"), lats),
-        "longitude": (("scan", "pixel"), lons),
-        "tbs": (("scan", "pixel", "channels"), tbs),
-        "spacecraft_longitude": (("scan"), sc_lon),
-        "spacecraft_latitude": (("scan"), sc_lat),
-        "spacecraft_altitude": (("scan"), sc_alt),
+        "latitude": (("scan", "pixel"), lats_hr),
+        "longitude": (("scan", "pixel"), lons_hr),
+        "observations": (("scan", "pixel", "channels"), tbs_hr),
+        "spacecraft_longitude": (("scan"), sc_lon_hr),
+        "spacecraft_latitude": (("scan"), sc_lat_hr),
+        "spacecraft_altitude": (("scan"), sc_alt_hr),
+        "scan_time": (("scan"), scan_time_hr)
     })
 
 
@@ -206,6 +234,9 @@ class NOAAGAASPInput(InputData):
             margin=64
         )
 
+        for var in reference_data_r:
+            reference_data_r[var].encoding = ref_data[var].encoding
+
         inpt_data = inpt_data[{"scan": slice(scan_start, scan_end)}]
         reference_data_r = reference_data_r[{"scan": slice(scan_start, scan_end)}]
         inpt_data.attrs["scan_start"] = inpt_granule.primary_index_range[0] + scan_start
@@ -311,10 +342,9 @@ class NOAAGAASPInput(InputData):
             # Get all available files for given day.
             inpt_recs = product.get(time_range)
             inpt_index = Index.index(product, inpt_recs)
-            print(inpt_recs)
             LOGGER.info(
-                f"Found %s files for %s/%s/%s.",
-                len(inpt_recs), year, month, day
+                f"Found %s files for %s-%s-%s.",
+                len(inpt_recs), year, f"{month:02}", f"{day:02}"
             )
 
             # If reference data has a fixed domain, subset index to files
@@ -324,10 +354,12 @@ class NOAAGAASPInput(InputData):
 
             # Collect available reference data.
             reference_recs = []
-            for granule in inpt_index.granules:
-                    reference_recs += reference_data.pansat_product.get(
-                        time_range=granule.time_range
-                    )
+            lock = FileLock("noaa_ref.lock")
+            with lock:
+                for granule in inpt_index.granules:
+                        reference_recs += reference_data.pansat_product.get(
+                            time_range=granule.time_range
+                        )
             reference_index = Index.index(reference_data.pansat_product, reference_recs)
 
             # Calculate matches between input and reference data.

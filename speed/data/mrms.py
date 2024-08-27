@@ -1,8 +1,8 @@
 """
-spree.data.mrms
+speed.data.mrms
 ===============
 
-This module provides function to extract collocations with the NOAA
+This module provides functionality to extract collocations with the NOAA
 Multi-Radar Multi-Sensor (MRMS) ground-based radar estimates.
 """
 import logging
