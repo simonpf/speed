@@ -173,6 +173,7 @@ class Combined(ReferenceData):
             cmb_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(88))
 
             swc = cmb_data.total_water_content - cmb_data.rain_water_content
+            cmb_data["snow_water_content"] = swc
             cmb_data["snow_water_path"] = swc.integrate("vertical_bins")
             cmb_data["rain_water_path"] = cmb_data["rain_water_content"].integrate("vertical_bins")
             cmb_data["ice_water_path"] = cmb_data["ice_water_content"].integrate("vertical_bins")
@@ -194,21 +195,39 @@ class Combined(ReferenceData):
 
             lock = FileLock("slh.lock")
             with lock:
-                slh_recs = l2a_gpm_dpr_slh.get(granule.time_range)
+                start_time = cmb_data["scan_time"].data[0]
+                end_time = cmb_data["scan_time"].data[-1]
+                central_time = start_time + 0.5 * (end_time - start_time)
+                slh_recs = l2a_gpm_dpr_slh.get(central_time)
                 if len(slh_recs) > 0:
+                    if len(slh_recs) > 1:
+                        LOGGER.error(
+                            "Found more than 1 SLH record!"
+                        )
+                        return None
                     scan_start, scan_end = granule.primary_index_range
                     slh_data = l2a_gpm_dpr_slh.open(slh_recs[0])[{"scans": slice(scan_start, scan_end)}]
                     slh_data = slh_data[["latent_heating"]].rename({
                         "scans": "matched_scans",
                         "pixels": "matched_pixels"
                     })
-                    slh_data["latent_heating"].data[:] = slh_data.latent_heating.data
+                    slh_data = slh_data.assign_coords(matched_scans=cmb_data.matched_scans.data)
+                    mask = slh_data.latent_heating.data < -9000
+                    slh_data["latent_heating"].data[mask] = np.nan
+                    if np.all(np.isnan(slh_data["latent_heating"].data)):
+                        LOGGER.warning(
+                            "No valid latent heating rates in SLH data."
+                        )
                     slh_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(80))
                     slh = slh_data.latent_heating.interp(vertical_bins=target_levels)
                 else:
+                    LOGGER.warning(
+                        "Found no SLH records for %s.", granule.time_range
+                    )
                     slh = xr.DataArray(np.zeros_like(swc.data), dims=("scans", "pixels", "vertical_bins"))
 
             cmb_data["latent_heating"] = slh
+
             results_cmb.append(cmb_data)
             cmb_filenames.append(granule.file_record.filename)
 
@@ -296,4 +315,4 @@ class Combined(ReferenceData):
 
 
 gpm_cmb = Combined("cmb", include_mirs=False)
-gpm_cmb_w_mirs = Combined("cmb_w_mirs", include_mirs=False)
+gpm_cmb_w_mirs = Combined("cmb_w_mirs", include_mirs=True)
