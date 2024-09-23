@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import List, Tuple, Optional
 
+from filelock import FileLock
 from gprof_nn.data.l1c import L1CFile
 from gprof_nn.data import preprocessor
 import pansat
