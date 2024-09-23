@@ -439,7 +439,9 @@ class GPMInput(InputData):
             LOGGER.info(f"Starting processing of product '%s'.", product.name)
 
             # Get all available files of GPM product for given day.
-            gpm_recs = product.get(time_range)
+            lock = FileLock("gpm_inpt.lock")
+            with lock:
+                gpm_recs = product.get(time_range)
             gpm_index = Index.index(product, gpm_recs)
             LOGGER.info(
                 f"Found %s files for %s/%s/%s.",
