@@ -169,7 +169,7 @@ class Combined(ReferenceData):
                 if "vertical_bins" in var_data.dims:
                     var_data = var_data.ffill("vertical_bins")
                 var_data.data[:] = var_data.data[..., ::-1]
-                cmb_data[var] = var_data
+                cmb_data[var] = var_data.astype(np.float32)
             cmb_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(88))
 
             swc = cmb_data.total_water_content - cmb_data.rain_water_content
@@ -206,7 +206,7 @@ class Combined(ReferenceData):
                         )
                         return None
                     scan_start, scan_end = granule.primary_index_range
-                    slh_data = l2a_gpm_dpr_slh.open(slh_recs[0])[{"scans": slice(scan_start, scan_end)}]
+                    slh_data = l2a_gpm_dpr_slh.open(slh_recs[0], slcs={"scans": slice(scan_start, scan_end)})
                     slh_data = slh_data[["latent_heating"]].rename({
                         "scans": "matched_scans",
                         "pixels": "matched_pixels"
@@ -214,6 +214,7 @@ class Combined(ReferenceData):
                     slh_data = slh_data.assign_coords(matched_scans=cmb_data.matched_scans.data)
                     mask = slh_data.latent_heating.data < -9000
                     slh_data["latent_heating"].data[mask] = np.nan
+                    slh_data = slh_data.bfill("vertical_bins")
                     if np.all(np.isnan(slh_data["latent_heating"].data)):
                         LOGGER.warning(
                             "No valid latent heating rates in SLH data."

@@ -402,6 +402,12 @@ class GPMInput(InputData):
             min_size=256
         )
 
+        del reference_data
+        del preprocessor_data
+        del preprocessor_data_r
+        del reference_data_r
+
+
     def process_day(
         self,
         year: int,
@@ -446,13 +452,12 @@ class GPMInput(InputData):
                 gpm_index = gpm_index.subset(roi=reference_data.domain)
 
             # Collect available reference data.
-            reference_recs = []
-            for granule in gpm_index.granules:
-                    reference_recs += reference_data.pansat_product.get(
-                        time_range=granule.time_range
-                    )
-            reference_index = Index.index(reference_data.pansat_product, reference_recs)
+            lock = FileLock("gpm_ref.lock")
+            with lock:
+                reference_recs = reference_data.pansat_product.get(time_range)
+            reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
+            print("Calculating matches")
             # Calculate matches between input and reference data.
             matches = find_matches(gpm_index, reference_index)
 

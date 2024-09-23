@@ -1179,7 +1179,7 @@ def calculate_footprint_averages(
     spatial_dims = data.latitude.ndim
     results = {
         var: (
-            (sensor_dims + data[var].dims[:2])[:2 + data[var].data.ndim - spatial_dims],
+            (sensor_dims + data[var].dims[2:])[:2 + data[var].data.ndim - spatial_dims],
             np.nan * np.zeros(latitudes.shape + data[var].shape[2:], dtype=data[var].dtype)
         ) for var in data if var != "time"
     }

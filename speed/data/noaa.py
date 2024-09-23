@@ -356,11 +356,8 @@ class NOAAGAASPInput(InputData):
             reference_recs = []
             lock = FileLock("noaa_ref.lock")
             with lock:
-                for granule in inpt_index.granules:
-                        reference_recs += reference_data.pansat_product.get(
-                            time_range=granule.time_range
-                        )
-            reference_index = Index.index(reference_data.pansat_product, reference_recs)
+                reference_recs = reference_data.pansat_product.get(time_range)
+            reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
             # Calculate matches between input and reference data.
             matches = find_matches(inpt_index, reference_index)
