@@ -190,8 +190,9 @@ class Combined(ReferenceData):
                 list(cmb_data["precipitation_type"].dims),
                 precip_type
             )
-            target_levels = np.concatenate([0.25 * np.arange(20) + 0.25, 10.5 + np.arange(8)])
+            target_levels = np.concatenate([0.5 * np.arange(20) + 0.25, 10.5 + np.arange(8)])
             cmb_data = cmb_data.interp(vertical_bins=target_levels)
+            cmb_data["vertical_bins"] = (("vertical_bins",), target_levels)
 
             lock = FileLock("slh.lock")
             with lock:
