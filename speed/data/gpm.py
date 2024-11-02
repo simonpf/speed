@@ -453,6 +453,7 @@ class GPMInput(InputData):
             # intersecting the domain.
             if reference_data.domain is not None:
                 gpm_index = gpm_index.subset(roi=reference_data.domain)
+                LOGGER.info("Found %s granules over ROI.", len(gpm_index.data))
 
             # Collect available reference data.
             lock = FileLock("gpm_ref.lock")
