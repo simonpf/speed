@@ -649,7 +649,7 @@ def save_target_data(
         "total_water_content": {"dtype": "float32", "compression": "zstd"},
         "rain_water_path": {"dtype": "float32", "compression": "zstd"},
         "snow_water_path": {"dtype": "float32", "compression": "zstd"},
-        "latent_heating": {"dtype": "float32"}
+        "latent_heating": {"dtype": "float32", "compression": "zstd"}
     }
 
     target_data = reference_data[target_variables]
