@@ -315,9 +315,10 @@ class GPMInput(InputData):
             method="nearest"
         ).astype("datetime64[ns]")
 
-        for var in ref_data_fpavg:
-            if var in reference_data_r:
-                reference_data_r[var + "_fpavg"] = ref_data_fpavg[var]
+        if ref_data_fpavg is not None:
+            for var in ref_data_fpavg:
+                if var in reference_data_r:
+                    reference_data_r[var + "_fpavg"] = ref_data_fpavg[var]
 
         # Limit scans to scans with useful data.
         scan_start, scan_end = get_useful_scan_range(
@@ -456,12 +457,12 @@ class GPMInput(InputData):
                 LOGGER.info("Found %s granules over ROI.", len(gpm_index.data))
 
             # Collect available reference data.
-            lock = FileLock("gpm_ref.lock")
-            with lock:
-                reference_recs = reference_data.pansat_product.get(time_range)
+            #lock = FileLock("gpm_ref.lock")
+            #with lock:
+            #    reference_recs = reference_data.pansat_product.get(time_range)
+            reference_recs = reference_data.pansat_product.get(time_range)
             reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
-            print("Calculating matches")
             # Calculate matches between input and reference data.
             matches = find_matches(gpm_index, reference_index)
 
@@ -494,7 +495,7 @@ MHS_PRODUCTS = [
 ]
 mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3)
 
-gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=0.98, radius_of_influence=15e3)
+gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=None, radius_of_influence=15e3)
 
 AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
 amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)

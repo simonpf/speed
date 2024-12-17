@@ -469,10 +469,10 @@ class MRMS(ReferenceData):
         mrms_data = []
 
         input_data = input_granule.open()
-        if "latitude_s1" in input_data:
+        if "pixels_s1" in input_data:
             input_data = input_data.rename(
                 scans="scan",
-                pixels_s2="pixel",
+                pixels_s1="pixel",
                 latitude_s1="latitude",
                 longitude_s1="longitude"
             )
@@ -499,6 +499,7 @@ class MRMS(ReferenceData):
             if mrms_data_t is None:
                 continue
             input_files += mrms_data_t.attrs["input_files"]
+
             if col_start is None:
                 lons = mrms_data_t.longitude.data
                 lats = mrms_data_t.latitude.data
