@@ -52,15 +52,15 @@ def add_cpcir_obs(
         lat_min_g, lat_max_g = lats_g.min(), lats_g.max()
 
     with xr.open_dataset(path_on_swath, group="input_data") as data_on_swath:
-        lons_n = data_on_swath.longitude.data
-        lats_n = data_on_swath.latitude.data
-        lon_min_n, lon_max_n = lons_n.min(), lons_n.max()
-        lat_min_n, lat_max_n = lats_n.min(), lats_n.max()
+        lons_s = data_on_swath.longitude.data
+        lats_s = data_on_swath.latitude.data
+        lon_min_s, lon_max_s = lons_s.min(), lons_s.max()
+        lat_min_s, lat_max_s = lats_s.min(), lats_s.max()
 
-    swath = SwathDefinition(lons=lons_n, lats=lats_n)
+    swath = SwathDefinition(lons=lons_s, lats=lats_s)
 
     cpcir_data_g = []
-    cpcir_data_n = []
+    cpcir_data_s = []
 
     for cpcir_rec in cpcir_recs:
         with xr.open_dataset(cpcir_rec.local_path) as data_t:
@@ -75,13 +75,13 @@ def add_cpcir_obs(
             data_g = data_g.interpolate_na(dim="longitude")
             cpcir_data_g.append(data_g.interp(latitude=lats_g, longitude=lons_g, method="nearest"))
 
-            lon_inds = np.where((lons >= lon_min_n) * (lons <= lon_max_n))[0]
-            lat_inds = np.where((lats >= lat_min_n) * (lats <= lat_max_n))[0]
-            data_n = data_t[{"latitude": lat_inds, "longitude": lon_inds}]
-            data_n = data_n.interpolate_na(dim="longitude")
-            lons = xr.DataArray(data=lons_n, dims=(("scans", "pixels")))
-            lats = xr.DataArray(data=lats_n, dims=(("scans", "pixels")))
-            cpcir_data_n.append(data_n.interp(latitude=lats, longitude=lons, method="nearest"))
+            lon_inds = np.where((lons >= lon_min_s) * (lons <= lon_max_s))[0]
+            lat_inds = np.where((lats >= lat_min_s) * (lats <= lat_max_s))[0]
+            data_s = data_t[{"latitude": lat_inds, "longitude": lon_inds}]
+            data_s = data_s.interpolate_na(dim="longitude")
+            lons = xr.DataArray(data=lons_s, dims=(("scans", "pixels")))
+            lats = xr.DataArray(data=lats_s, dims=(("scans", "pixels")))
+            cpcir_data_s.append(data_s.interp(latitude=lats, longitude=lons, method="nearest"))
 
 
     # Save data in gridded format.
@@ -89,10 +89,10 @@ def add_cpcir_obs(
     cpcir_data_g = cpcir_data_g.interp(time=time_steps, method="nearest")
     cpcir_data_g.to_netcdf(path_gridded, group="geo_ir", mode="a")
 
-    # Save data in gridded format.
-    cpcir_data_n = xr.concat(cpcir_data_n, "time").sortby("time").rename({"Tb": "tbs_ir"})
-    cpcir_data_n = cpcir_data_g.interp(time=time_steps, method="nearest")
-    cpcir_data_n.to_netcdf(path_on_swath, group="geo_ir", mode="a")
+    # Save data in onswath format.
+    cpcir_data_s = xr.concat(cpcir_data_s, "time").sortby("time").rename({"Tb": "tbs_ir"})
+    cpcir_data_s = cpcir_data_s.interp(time=time_steps, method="nearest")
+    cpcir_data_s.to_netcdf(path_on_swath, group="geo_ir", mode="a")
 
 
 @click.command()
@@ -109,10 +109,17 @@ def add_cpcir_obs(
     default=8,
     help="The number of processes to use for the data extraction."
 )
+@click.option(
+    "--pattern",
+    type=str,
+    default="*.nc",
+    help="Glob pattern to select collocations files to process."
+)
 def cli(
         collocation_path: str,
         time_range: int = 8,
-        n_processes: int = 4
+        n_processes: int = 4,
+        pattern: str = "*.nc"
 ):
     """
     Extract CPCIR (MERGEDIR) observations for GPM collocations in COLLOCATION_PATH.
@@ -126,8 +133,8 @@ def cli(
         LOGGER.error("Provided collocation path must point to an existing directory.")
         return 1
 
-    files_on_swath = sorted(list((collocation_path / "on_swath").glob("*.nc")))
-    files_gridded = sorted(list((collocation_path / "gridded").glob("*.nc")))
+    files_on_swath = sorted(list((collocation_path / "on_swath").glob(pattern)))
+    files_gridded = sorted(list((collocation_path / "gridded").glob(pattern)))
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:

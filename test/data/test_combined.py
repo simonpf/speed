@@ -1,7 +1,6 @@
 """
 Tests for the speed.data.combined module.
 =========================================
-
 """
 import os
 
@@ -45,7 +44,12 @@ def test_load_reference_data(cmb_match):
       variables.
     """
     input_granule, cmb_granules = cmb_match
-    ref_data = gpm_cmb.load_reference_data(input_granule, cmb_granules)
+    ref_data, _ = gpm_cmb.load_reference_data(
+        input_granule,
+        cmb_granules,
+        None,
+        None
+    )
 
     assert "surface_precip" in ref_data
     assert "rain_water_content" in ref_data

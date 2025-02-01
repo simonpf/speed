@@ -19,7 +19,7 @@ import xarray as xr
 import click
 
 import speed.logging
-from speed.data import cpcir, goes
+from speed.data import cpcir, goes, ancillary
 
 LOGGER = logging.getLogger(__file__)
 
@@ -61,6 +61,8 @@ def extract_data(
     import speed.data.mrms
     import speed.data.gpm_gv
     import speed.data.combined
+    import speed.data.noaa
+    import speed.data.wegener_net
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:
@@ -394,13 +396,13 @@ def extract_evaluation_data(
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:
-        time_str = f_on_swath.name.split("_")[2][:-3]
+        time_str = f_on_swath.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
-        time_str = f_gridded.name.split("_")[2][:-3]
+        time_str = f_gridded.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
@@ -432,3 +434,4 @@ cli.add_command(extract_training_data_tabular, name="extract_training_data_tabul
 cli.add_command(extract_evaluation_data, name="extract_evaluation_data")
 cli.add_command(cpcir.cli, name="extract_cpcir_obs")
 cli.add_command(goes.cli, name="extract_goes_obs")
+cli.add_command(ancillary.cli, name="add_ancillary_data")

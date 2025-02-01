@@ -1,35 +1,22 @@
 """
-speed.data.gpm
+speed.data.noaa
 ==============
 
-This module contains the code to process GPM L1C data into SPEED collocations.
+This module provides functionality to extract collocations from NOAA GAASP
+L1B files.
 """
 from datetime import datetime, timedelta
 import logging
-import multiprocessing
-import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import List, Tuple, Optional
+from typing import List, Tuple
+
 
 from filelock import FileLock
-from gprof_nn.data.l1c import L1CFile
-from gprof_nn.data import preprocessor
 import pansat
 from pansat import FileRecord, TimeRange, Granule
 from pansat.environment import get_index
-from pansat.products.satellite.gpm import (
-    merged_ir,
-    l1c_metopa_mhs,
-    l1c_metopb_mhs,
-    l1c_metopc_mhs,
-    l1c_noaa18_mhs,
-    l1c_noaa19_mhs,
-    l1c_noaa20_atms,
-    l1c_gcomw1_amsr2,
-    l1c_tropics03_tms,
-    l1c_tropics06_tms,
-    l1c_r_gpm_gmi
+from pansat.products.satellite.noaa.gaasp import (
+    l1b_gcomw1_amsr2
 )
 from pansat.granule import merge_granules, Granule
 from pansat.catalog import Index
@@ -59,51 +46,13 @@ from speed import grids
 LOGGER = logging.getLogger(__file__)
 
 
-def run_preprocessor(gpm_granule: Granule) -> xr.Dataset:
-    """
-    Run preprocessor on a GPM granule.
-
-    Args:
-        gpm_granule: A pansat granule identifying a subset of an orbit
-            of GPM L1C files.
-
-    Return:
-        An xarray.Dataset containing the results from the preprocessor.
-    """
-    old_dir = os.getcwd()
-
-    try:
-        with TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            l1c_file = extract_scans(gpm_granule, tmp, min_scans=128)
-            os.chdir(tmp)
-            sensor = L1CFile(l1c_file).sensor
-            preprocessor_data = preprocessor.run_preprocessor(
-                l1c_file, sensor, robust=False
-            )
-    finally:
-        os.chdir(old_dir)
-
-    preprocessor_data = preprocessor_data.rename({
-        "scans": "scan",
-        "pixels": "pixel",
-        "channels": "channel_gprof",
-        "brightness_temperatures": "observations_gprof",
-        "earth_incidence_angle": "earth_incidence_angle_gprof"
-    })
-    invalid = preprocessor_data.observations_gprof.data < 0
-    preprocessor_data.observations_gprof.data[invalid] = np.nan
-
-    return preprocessor_data
 
 
-def load_l1c_brightness_temperatures(
-        gpm_granule: Granule,
-        preprocessor_data: xr.Dataset,
-        radius_of_influence: float
+def load_brightness_temperatures(
+        granule: Granule,
 ) -> np.ndarray:
     """
-    Load and, if required, remap L1C brightness temperatures to preprocessor swath.
+    Load AMSR2 brightness temperatures.
 
     Args:
         gpm_granule: The granule of GPM L1C data from which to extract the brightness temperatures.
@@ -114,110 +63,85 @@ def load_l1c_brightness_temperatures(
     Return:
         A numpy array containing all combined brightness temperatures from the L1C file.
     """
-    l1c_data = gpm_granule.open()
-    lats_p = preprocessor_data.latitude.data
-    lons_p = preprocessor_data.longitude.data
+    l1b_data = granule.open()
 
-    if "tbs" in l1c_data.variables:
-        lats = l1c_data.latitude.data
-        lons = l1c_data.longitude.data
-        if lats.shape == lats_p.shape:
-            return l1c_data.tbs
+    lats = l1b_data.latitude_s2.data
+    lons = l1b_data.longitude_s2.data
 
-        source = SwathDefinition(lons=lons, lats=lats)
-        target = SwathDefinition(lons=lons_p, lats=lats_p)
-        tbs = kd_tree.resample_nearest(
-            source,
-            l1c_data.tbs.data,
-            target,
-            radius_of_influence=radius_of_influence,
-            fill_value=np.nan
-        )
-        eia = kd_tree.resample_nearest(
-            source,
-            l1c_data.incidence_angle.data,
-            target,
-            radius_of_influence=radius_of_influence,
-            fill_value=np.nan
-        )
-        if eia.ndim < tbs.ndim:
-            eia = np.broadcast_to(eia[..., None], tbs.shape)
-        return tbs, eia
+    tbs_s1 = np.repeat(l1b_data.tbs_s1.data, 2, axis=1)
+    tbs_s2 = l1b_data.tbs_s2.data
+    tbs_s3 = l1b_data.tbs_s3.data
+    sc_lon = l1b_data.spacecraft_longitude.data
+    sc_lat = l1b_data.spacecraft_latitude.data
+    sc_alt = l1b_data.spacecraft_altitude.data
+    tbs = np.concatenate((tbs_s1, tbs_s2, tbs_s3), axis=-1)
+    scan_time = l1b_data.scan_time.data
 
-    tbs = []
-    eia = []
-    swath = 1
-    while f"latitude_s{swath}" in l1c_data.variables:
-        lats = l1c_data[f"latitude_s{swath}"].data
-        lons = l1c_data[f"longitude_s{swath}"].data
+    # Upsample fields
+    n_scans, n_pixels, n_channels = tbs.shape
 
-        source = SwathDefinition(lons=lons, lats=lats)
-        target = SwathDefinition(lons=lons_p, lats=lats_p)
-        tbs.append(
-            kd_tree.resample_nearest(
-                source,
-                l1c_data[f"tbs_s{swath}"].data,
-                target,
-                radius_of_influence=radius_of_influence,
-                fill_value=np.nan
-            )
-        )
-        eia_s = kd_tree.resample_nearest(
-            source,
-            l1c_data[f"incidence_angle_s{swath}"].data,
-            target,
-            radius_of_influence=radius_of_influence,
-            fill_value=np.nan
-        )
-        if eia_s.ndim < tbs[-1].ndim:
-            eia_s = np.broadcast_to(eia_s[..., None], tbs[-1].shape)
-        eia.append(eia_s)
-        swath += 1
+    lons_hr = np.zeros_like(lons, shape=(2 * n_scans - 1, n_pixels))
+    lons_hr[::2] = lons
+    lons_hr[1::2] = 0.5 * (lons[:-1] + lons[1:])
+    lats_hr = np.zeros_like(lats, shape=(2 * n_scans - 1, n_pixels))
+    lats_hr[::2] = lats
+    lats_hr[1::2] = 0.5 * (lats[:-1] + lats[1:])
+    tbs_hr = np.zeros_like(tbs, shape=(2 * n_scans - 1, n_pixels, n_channels))
+    tbs_hr[::2] = tbs
+    tbs_hr[1::2] = 0.5 * (tbs[:-1] + tbs[1:])
+    scan_time_hr = np.zeros_like(scan_time, shape=(2 * n_scans - 1))
+    scan_time_hr[::2] = scan_time
+    scan_time_hr[1::2] = scan_time[1:] + 0.5 * (scan_time[1:] - scan_time[:-1])
 
-    tbs = np.concatenate(tbs, axis=-1)
-    eia = np.concatenate(eia, axis=-1)
-    invalid = tbs < 0
-    tbs[invalid] = np.nan
-    return tbs, eia
+    sc_lon_hr = np.zeros_like(sc_lon, shape=(2 * n_scans - 1))
+    sc_lon_hr[::2] = sc_lon
+    sc_lon_hr[1::2] = 0.5 * (sc_lon[:-1] + sc_lon[1:])
+    sc_lat_hr = np.zeros_like(sc_lat, shape=(2 * n_scans - 1))
+    sc_lat_hr[::2] = sc_lat
+    sc_lat_hr[1::2] = 0.5 * (sc_lat[:-1] + sc_lat[1:])
+    sc_alt_hr = np.zeros_like(sc_alt, shape=(2 * n_scans - 1))
+    sc_alt_hr[::2] = sc_alt
+    sc_alt_hr[1::2] = 0.5 * (sc_alt[:-1] + sc_alt[1:])
+
+    return xr.Dataset({
+        "latitude": (("scan", "pixel"), lats_hr),
+        "longitude": (("scan", "pixel"), lons_hr),
+        "observations": (("scan", "pixel", "channels"), tbs_hr),
+        "spacecraft_longitude": (("scan"), sc_lon_hr),
+        "spacecraft_latitude": (("scan"), sc_lat_hr),
+        "spacecraft_altitude": (("scan"), sc_alt_hr),
+        "scan_time": (("scan"), scan_time_hr)
+    })
 
 
-class GPMInput(InputData):
+class NOAAGAASPInput(InputData):
     """
-    The GPMInput class provides functionality to load data from any sensor
-    of the GPM constellation and combine this data with any of the reference
-    data classes.
+    The NOAAGAASP class provides functionality to load data from NOAA AMSR2
+    L1B files.
     """
     def __init__(
             self,
             name: str,
             products: List[pansat.Product],
-            beam_width: float = 0.98,
-            radius_of_influence: float = 60e3
+            radius_of_influence: float = 5e3
     ):
         """
         Args:
             name: The name of the input data source, which is used to identify the data from
                 the command line interface.
             products: The pansat products from which to obtain input data files.
-            beam_width: The beam width to use for the calculation of footprint averages.
-            radius_of_influence: The radius of influence to use for the resampling of the
-                sensor data.
         """
         super().__init__(name)
         self.products = products
-        self.beam_width = beam_width
         self.radius_of_influence = radius_of_influence
+        self.beam_width = None
 
-        characteristics_dir = Path(__file__).parent / "sensor_characteristics"
-        with open(characteristics_dir / (name + ".toml")) as char_file:
-            self.characteristics = toml.loads(char_file.read())
 
     def process_match(
         self,
         match: Tuple[Granule, List[Granule]],
         reference_data: ReferenceData,
-        output_folder: Path,
-        min_area: float = 0.0
+        output_folder: Path
     ) -> None:
         """
         Extract collocations from matched input and reference data.
@@ -230,8 +154,6 @@ class GPMInput(InputData):
                 reference data for the matched granules.
             output_folder: The base folder to which to write the extracted
                 collocations in on_swath and gridded format.
-            min_area: A minimum area in square degree below which collocations
-                are discarded.
         """
         inpt_granule, ref_granules = match
         ref_granules = list(ref_granules)
@@ -265,33 +187,21 @@ class GPMInput(InputData):
             inpt_granule.time_range = TimeRange(start_time, end_time)
 
         ref_geom = ref_granules[0].geometry.to_shapely()
-        gpm_geom = inpt_granule.geometry.to_shapely()
-        area = ref_geom.intersection(gpm_geom).area
-        if area < min_area:
+        inpt_geom = inpt_granule.geometry.to_shapely()
+        area = ref_geom.intersection(inpt_geom).area
+        if area < 15:
             LOGGER.info(
                 "Discarding match between '%s' and '%s' because area "
-                " is less than %s square degree.",
+                " is less than 25 square degree.",
                 inpt_granule.file_record.product.name,
                 reference_data.pansat_product.name,
-                min_area
             )
             return None
 
-        preprocessor_data = run_preprocessor(inpt_granule)
-        preprocessor_data.attrs.pop("frequencies")
-
-        tbs_mw, eia_mw = load_l1c_brightness_temperatures(
-            inpt_granule,
-            preprocessor_data,
-            self.radius_of_influence
-        )
-        preprocessor_data["observations"] = (("scan", "pixel", "channel"), tbs_mw.data)
-        preprocessor_data["earth_incidence_angle"] = (("scan", "pixel", "channel"), eia_mw.data)
-        preprocessor_data["observations"].attrs.update(self.characteristics["channels"])
-        preprocessor_data["observations_gprof"].attrs.update(self.characteristics["channels_gprof"])
+        inpt_data = load_brightness_temperatures(inpt_granule,)
 
         # Load and combine reference data for all matche granules
-        ref_data, ref_data_fpavg = reference_data.load_reference_data(
+        ref_data, _ = reference_data.load_reference_data(
             inpt_granule,
             ref_granules,
             radius_of_influence=self.radius_of_influence,
@@ -304,21 +214,17 @@ class GPMInput(InputData):
             )
             return None
 
+
         reference_data_r = ref_data.interp(
-            latitude=preprocessor_data.latitude,
-            longitude=preprocessor_data.longitude,
+            latitude=inpt_data.latitude,
+            longitude=inpt_data.longitude,
             method="nearest",
         )
         reference_data_r["time"] = ref_data.time.astype(np.int64).interp(
-            latitude=preprocessor_data.latitude,
-            longitude=preprocessor_data.longitude,
+            latitude=inpt_data.latitude,
+            longitude=inpt_data.longitude,
             method="nearest"
         ).astype("datetime64[ns]")
-
-        if ref_data_fpavg is not None:
-            for var in ref_data_fpavg:
-                if var in reference_data_r:
-                    reference_data_r[var + "_fpavg"] = ref_data_fpavg[var]
 
         # Limit scans to scans with useful data.
         scan_start, scan_end = get_useful_scan_range(
@@ -328,10 +234,13 @@ class GPMInput(InputData):
             margin=64
         )
 
-        preprocessor_data = preprocessor_data[{"scan": slice(scan_start, scan_end)}]
+        for var in reference_data_r:
+            reference_data_r[var].encoding = ref_data[var].encoding
+
+        inpt_data = inpt_data[{"scan": slice(scan_start, scan_end)}]
         reference_data_r = reference_data_r[{"scan": slice(scan_start, scan_end)}]
-        preprocessor_data.attrs["scan_start"] = inpt_granule.primary_index_range[0] + scan_start
-        preprocessor_data.attrs["scan_end"] = inpt_granule.primary_index_range[0] + scan_end
+        inpt_data.attrs["scan_start"] = inpt_granule.primary_index_range[0] + scan_start
+        inpt_data.attrs["scan_end"] = inpt_granule.primary_index_range[0] + scan_end
 
         row_start = ref_data.attrs.get("lower_left_row", 0)
         n_rows = ref_data.latitude.size
@@ -343,7 +252,7 @@ class GPMInput(InputData):
             surface_precip = reference_data_r.surface_precip.data
         else:
             surface_precip = reference_data_r.surface_precip_combined.data
-        if np.isfinite(surface_precip).sum() < 1:
+        if np.isfinite(surface_precip).sum() < 50:
             LOGGER.info(
                 "Skipping match because it contains only %s valid "
                 " surface precip pixels.",
@@ -356,12 +265,12 @@ class GPMInput(InputData):
             col_start:col_start + n_cols
         ]
 
-        indices = calculate_grid_resample_indices(preprocessor_data, grid)
-        preprocessor_data["row_index"] = indices.row_index
-        preprocessor_data["col_index"] = indices.col_index
+        indices = calculate_grid_resample_indices(inpt_data, grid)
+        inpt_data["row_index"] = indices.row_index
+        inpt_data["col_index"] = indices.col_index
 
         gpm_input_file = inpt_granule.file_record.filename
-        preprocessor_data.attrs["gpm_input_file"] = gpm_input_file
+        inpt_data.attrs["gpm_input_file"] = gpm_input_file
 
         # Save data in on_swath format.
         LOGGER.info(
@@ -371,21 +280,21 @@ class GPMInput(InputData):
         time = save_data_on_swath(
             self.name,
             reference_data.name,
-            preprocessor_data,
+            inpt_data,
             reference_data_r,
             output_folder,
             min_scans=128
         )
 
         # Save data in gridded format.
-        preprocessor_data_r = resample_data(
-            preprocessor_data, grid, self.radius_of_influence
+        inpt_data_r = resample_data(
+            inpt_data, grid, self.radius_of_influence
         )
-        for name, attr in preprocessor_data.attrs.items():
-            preprocessor_data_r.attrs[name] = attr
+        for name, attr in inpt_data.attrs.items():
+            inpt_data_r.attrs[name] = attr
 
         indices = calculate_swath_resample_indices(
-            preprocessor_data, grid, self.radius_of_influence
+            inpt_data, grid, self.radius_of_influence
         )
         ref_data["scan_index"] = indices.scan_index
         ref_data["pixel_index"] = indices.pixel_index
@@ -398,17 +307,10 @@ class GPMInput(InputData):
             self.name,
             reference_data.name,
             time,
-            preprocessor_data_r,
+            inpt_data_r,
             ref_data,
             output_folder,
-            min_size=256
         )
-
-        del reference_data
-        del preprocessor_data
-        del preprocessor_data_r
-        del reference_data_r
-
 
     def process_day(
         self,
@@ -417,7 +319,6 @@ class GPMInput(InputData):
         day: int,
         reference_data: ReferenceData,
         output_folder: Path,
-        min_area: float = 5
     ):
         """
         Process all collocations available on a given day.
@@ -430,8 +331,6 @@ class GPMInput(InputData):
                 reference data source.
             output_folder: The folder to which to write the extracted
                 collocations.
-            min_area: A minimum area in square degree below which collocations
-                are discarded.
         """
         start_time = datetime(year, month, day)
         end_time = start_time + timedelta(days=1)
@@ -440,31 +339,28 @@ class GPMInput(InputData):
         for product in self.products:
             LOGGER.info(f"Starting processing of product '%s'.", product.name)
 
-            # Get all available files of GPM product for given day.
-            lock = FileLock("gpm_inpt.lock")
-            with lock:
-                gpm_recs = product.get(time_range)
-            gpm_index = Index.index(product, gpm_recs)
+            # Get all available files for given day.
+            inpt_recs = product.get(time_range)
+            inpt_index = Index.index(product, inpt_recs)
             LOGGER.info(
-                f"Found %s files for %s/%s/%s.",
-                len(gpm_recs), year, month, day
+                f"Found %s files for %s-%s-%s.",
+                len(inpt_recs), year, f"{month:02}", f"{day:02}"
             )
 
             # If reference data has a fixed domain, subset index to files
             # intersecting the domain.
             if reference_data.domain is not None:
-                gpm_index = gpm_index.subset(roi=reference_data.domain)
-                LOGGER.info("Found %s granules over ROI.", len(gpm_index.data))
+                inpt_index = inpt_index.subset(roi=reference_data.domain)
 
             # Collect available reference data.
-            #lock = FileLock("gpm_ref.lock")
-            #with lock:
-            #    reference_recs = reference_data.pansat_product.get(time_range)
-            reference_recs = reference_data.pansat_product.get(time_range)
+            reference_recs = []
+            lock = FileLock("noaa_ref.lock")
+            with lock:
+                reference_recs = reference_data.pansat_product.get(time_range)
             reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
             # Calculate matches between input and reference data.
-            matches = find_matches(gpm_index, reference_index)
+            matches = find_matches(inpt_index, reference_index)
 
             LOGGER.info(
                 f"Found %s matches for input data product '%s' and "
@@ -486,19 +382,8 @@ class GPMInput(InputData):
                     LOGGER.exception(exc)
 
 
-MHS_PRODUCTS = [
-    l1c_metopa_mhs,
-    l1c_metopb_mhs,
-    l1c_metopc_mhs,
-    l1c_noaa18_mhs,
-    l1c_noaa19_mhs,
-]
-mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3)
-
-gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=None, radius_of_influence=15e3)
-
-AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
-amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)
-
-ATMS_PRODUCTS = [l1c_noaa20_atms]
-atms = GPMInput("atms", ATMS_PRODUCTS, radius_of_influence=64e3)
+noaa_amsr2 = NOAAGAASPInput(
+    "noaa_amsr2",
+    [l1b_gcomw1_amsr2],
+    radius_of_influence=5e3
+)

@@ -1,8 +1,8 @@
 """
-spree.data.mrms
+speed.data.mrms
 ===============
 
-This module provides function to extract collocations with the NOAA
+This module provides functionality to extract collocations with the NOAA
 Multi-Radar Multi-Sensor (MRMS) ground-based radar estimates.
 """
 import logging
@@ -469,11 +469,19 @@ class MRMS(ReferenceData):
         mrms_data = []
 
         input_data = input_granule.open()
-        if "latitude_s1" in input_data:
+        if "pixels_s1" in input_data:
             input_data = input_data.rename(
+                scans="scan",
+                pixels_s1="pixel",
                 latitude_s1="latitude",
                 longitude_s1="longitude"
             )
+        else:
+            input_data = input_data.rename(
+                scans="scan",
+                pixels="pixel",
+            )
+
         input_data = input_data[[
             "scan_time",
             "latitude",
@@ -491,6 +499,7 @@ class MRMS(ReferenceData):
             if mrms_data_t is None:
                 continue
             input_files += mrms_data_t.attrs["input_files"]
+
             if col_start is None:
                 lons = mrms_data_t.longitude.data
                 lats = mrms_data_t.latitude.data
@@ -562,6 +571,10 @@ class MRMS(ReferenceData):
             input_granule
         )
         mrms_data_d, _ = downsample_mrms_data(mrms_data, grid=grid)
+
+        # Don't calculate footprint averages if beam width is None
+        if beam_width is None:
+            return mrms_data_d, None
 
         latitudes = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
         longitudes = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
