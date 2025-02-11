@@ -63,6 +63,8 @@ def extract_data(
     import speed.data.combined
     import speed.data.noaa
     import speed.data.wegener_net
+    import speed.data.amedas
+    import speed.data.kma
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:

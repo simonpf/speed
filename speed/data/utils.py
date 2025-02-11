@@ -1253,7 +1253,8 @@ def calculate_footprint_averages(
 def interp_along_swath(
         ref_data: xr.Dataset,
         scan_time: xr.DataArray,
-        dimension: str = "time"
+        dimension: str = "time",
+        ref_dims: Tuple[str] = (("latitude", "longitude"))
 ) -> xr.Dataset:
     """
     Interpolate time-gridded data to swath.
@@ -1287,7 +1288,7 @@ def interp_along_swath(
     inds = np.digitize(scan_time.astype(np.int64), time_bins.astype(np.int64))
     out_of_range = (inds == 0) + (inds==time_bins.size)
     inds[out_of_range] = time_bins.size // 2
-    inds = xr.DataArray(inds - 1, dims=(("latitude", "longitude")))
+    inds = xr.DataArray(inds - 1, dims=ref_dims)
 
     time = ref_data.time[{"time": inds}]
     ref_data_r = ref_data[{"time": inds}]

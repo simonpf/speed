@@ -460,10 +460,13 @@ class GPMInput(InputData):
             #lock = FileLock("gpm_ref.lock")
             #with lock:
             #    reference_recs = reference_data.pansat_product.get(time_range)
+            LOGGER.info("Downloading reference data.")
             reference_recs = reference_data.pansat_product.get(time_range)
+            LOGGER.info("Indexing reference data.")
             reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
             # Calculate matches between input and reference data.
+            LOGGER.info("Searching matches.")
             matches = find_matches(gpm_index, reference_index)
 
             LOGGER.info(
