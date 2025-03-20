@@ -473,13 +473,17 @@ class MRMS(ReferenceData):
             input_data = input_data.rename(
                 scans="scan",
                 pixels_s1="pixel",
-                latitude_s1="latitude",
-                longitude_s1="longitude"
             )
         else:
             input_data = input_data.rename(
                 scans="scan",
                 pixels="pixel",
+            )
+
+        if "latitude_s1" in input_data:
+            input_data = input_data.rename(
+                latitude_s1="latitude",
+                longitude_s1="longitude"
             )
 
         input_data = input_data[[

@@ -558,9 +558,11 @@ def save_input_data(
             scenes.
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
+    year = time.year
+    month = time.month
     filename = f"{sensor}_{date_str}.nc"
 
-    output_path = path / f"{sensor}"
+    output_path = path / f"{sensor}" / f"{year:04}" / f"{month:02}"
     output_path.mkdir(exist_ok=True, parents=True)
 
     uint16_max = 2 ** 16 - 1
@@ -620,8 +622,10 @@ def save_target_data(
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"target_{date_str}.nc"
+    year = time.year
+    month = time.month
 
-    output_path = path / "target"
+    output_path = path / "target" / f"{year:04}" / f"{month:02}"
     output_path.mkdir(exist_ok=True, parents=True)
 
     target_variables = [
