@@ -16,6 +16,7 @@ import click
 import numpy as np
 from pansat import TimeRange, FileRecord
 from pansat.time import to_datetime64
+from pansat.utils import resample_data
 from pansat.products.satellite.goes import (
     GOES16L1BRadiances
 )
@@ -89,7 +90,7 @@ def add_goes_obs(
         path_on_swath: Path,
         path_gridded: Path,
         n_steps: int = 4,
-        sector: str = "full"
+        sector: str = "conus"
 ) -> None:
     """
     Add GOES observations for extracted collocations.
@@ -102,6 +103,17 @@ def add_goes_obs(
             sector.
     """
     time_step = np.timedelta64(15, "m")
+
+    try:
+        data = xr.open_dataset(path_on_swath, group="geo")
+        data.close()
+        LOGGER.info(
+            "Skipping input files %s because they already contain geostationary observations.",
+            path_on_swath
+        )
+        return None
+    except Exception:
+        pass
 
     time_str = path_on_swath.name.split("_")[2][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
@@ -123,11 +135,13 @@ def add_goes_obs(
         lon_min_g, lon_max_g = lons_g.min(), lons_g.max()
         lats_g = data_gridded.latitude.data
         lat_min_g, lat_max_g = lats_g.min(), lats_g.max()
+    del data_gridded
 
     with xr.open_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_n = data_on_swath.longitude.data
         lats_n = data_on_swath.latitude.data
         lat_min, lat_max = lats_g.min(), lats_g.max()
+    del data_on_swath
 
     lons, lats = np.meshgrid(lons_g, lats_g)
     grid = SwathDefinition(xr.DataArray(lons), xr.DataArray(lats))
@@ -137,36 +151,46 @@ def add_goes_obs(
     goes_data_n = []
     times = []
 
-    with TemporaryDirectory() as tmp:
-        for time in time_steps:
-            try:
-                logging.disable(logging.CRITICAL)
-                recs = [rec.get() for rec in goes_recs[time]]
+    for time in time_steps:
+        try:
+            logging.disable(logging.CRITICAL)
+            recs = [rec.get() for rec in goes_recs[time]]
 
-                with warnings.catch_warnings():
-                    scene = Scene([str(rec.local_path) for rec in recs])
-                    scene.load([f"C{ind:02}" for ind in range(1, 17)])
-                    scene_g = scene.resample(grid, generate=False, cache_dir=tmp)
-                goes_obs = scene_g.to_xarray_dataset()
-                goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
-                goes_data_g.append(goes_obs)
+            obs_g = []
+            obs_n = []
 
-                with warnings.catch_warnings():
-                    scene_n = scene.resample(swath, generate=False, cache_dir=tmp)
-                goes_obs = scene_n.to_xarray_dataset()
-                goes_obs = np.stack([goes_obs[f"C{ind:02}"] for ind in range(1, 17)], -1)
-                goes_data_n.append(goes_obs)
-                times.append(to_datetime64(recs[0].central_time.start))
+            for rec in recs:
+                data = rec.open()
+                data_g = resample_data(data[["Rad", "latitude", "longitude"]], grid, radius_of_influence=5e3)
+                data_n = resample_data(data[["Rad", "latitude", "longitude"]], swath, radius_of_influence=5e3)
+                channel = data.band_id.data.item()
+                name = f"C{channel:02}"
+                obs_g.append(xr.Dataset({
+                    "channel": channel,
+                    "observations": (("latitude", "longitude"), data_g.Rad.data)
+                }))
+                obs_n.append(xr.Dataset({
+                    "channel": channel,
+                    "observations": (("latitude", "longitude"), data_n.Rad.data)
+                }))
+                del data
+                del data_g
+                del data_n
 
-                del scene
-                del scene_g
-                del scene_n
-            finally:
-                logging.disable(logging.NOTSET)
+            obs_g = xr.concat(obs_g, dim="channel").sortby("channel").transpose("latitude", "longitude", "channel")
+            obs_n = xr.concat(obs_n, dim="channel").sortby("channel").transpose("latitude", "longitude", "channel")
+
+            goes_data_g.append(obs_g.observations.data)
+            goes_data_n.append(obs_n.observations.data)
+            times.append(to_datetime64(recs[0].central_time.start))
+
+        finally:
+            logging.disable(logging.NOTSET)
 
         # Save data in gridded format.
 
     times = np.array(times)
+    print(times)
     LOGGER.info(
         "Saving GOES data for collocation %s.",
         time_str
@@ -197,6 +221,9 @@ def add_goes_obs(
     )
     goes_data_n.observations.encoding = {"dtype": "float32", "zlib": True}
     goes_data_n.to_netcdf(path_on_swath, group="geo", mode="a")
+
+    del goes_data_g
+    del goes_data_n
 
 
 
