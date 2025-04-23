@@ -6,6 +6,7 @@ This module contains functionality to add GOES 16 observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
+import gc
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -102,7 +103,7 @@ def add_goes_obs(
         sector: A string specifying whether to load the data the full disk or only the CONUS
             sector.
     """
-    time_step = np.timedelta64(15, "m")
+    time_step = np.timedelta64(10, "m")
 
     try:
         data = xr.open_dataset(path_on_swath, group="geo")
@@ -184,13 +185,15 @@ def add_goes_obs(
             goes_data_n.append(obs_n.observations.data)
             times.append(to_datetime64(recs[0].central_time.start))
 
+            del obs_g
+            del obs_n
+
         finally:
             logging.disable(logging.NOTSET)
 
         # Save data in gridded format.
 
     times = np.array(times)
-    print(times)
     LOGGER.info(
         "Saving GOES data for collocation %s.",
         time_str
@@ -222,8 +225,10 @@ def add_goes_obs(
     goes_data_n.observations.encoding = {"dtype": "float32", "zlib": True}
     goes_data_n.to_netcdf(path_on_swath, group="geo", mode="a")
 
+    del times
     del goes_data_g
     del goes_data_n
+    gc.collect()
 
 
 
@@ -268,6 +273,7 @@ def cli(
         times_gridded[median_time] = f_gridded
 
     combined = set(times_gridded.keys()).intersection(set(times_on_swath.keys()))
+    combined = sorted(list(combined))
 
     LOGGER.info(f"Found {len(combined)} collocations in {collocation_path}.")
 
