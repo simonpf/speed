@@ -5,6 +5,7 @@ speed.data.ancillary
 Functionality to extract ancillary data for SPEED collocations.
 """
 from calendar import monthrange
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
@@ -793,13 +794,15 @@ def cli(
         tasks = []
         for median_time in combined:
             tasks.append(
-                add_ancillary_data,
-                times_on_swath[median_time],
-                times_gridded[median_time],
-                era5_path=era5_path,
-                era5_lai_path=era5_lai_path,
-                gprof_ancillary_dir=gprof_ancillary_dir,
-                gprof_ingest_dir=gprof_ingest_dir
+                pool.submit(
+                    add_ancillary_data,
+                    times_on_swath[median_time],
+                    times_gridded[median_time],
+                    era5_path=era5_path,
+                    era5_lai_path=era5_lai_path,
+                    gprof_ancillary_dir=gprof_ancillary_dir,
+                    gprof_ingest_dir=gprof_ingest_dir
+                )
             )
         with Progress(console=speed.logging.get_console()) as progress:
             extraction = progress.add_task("Extracting GOES observations:", total=len(tasks))

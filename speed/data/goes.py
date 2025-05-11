@@ -157,36 +157,22 @@ def add_goes_obs(
             logging.disable(logging.CRITICAL)
             recs = [rec.get() for rec in goes_recs[time]]
 
-            obs_g = []
-            obs_n = []
+            files = [str(rec.local_path) for rec in recs]
+            scene = Scene(files, reader="abi_l1b")
+            datasets = [f"C{ind:02}" for ind in range(1, 17)]
+            scene.load(datasets)
 
-            for rec in recs:
-                data = rec.open()
-                data_g = resample_data(data[["Rad", "latitude", "longitude"]], grid, radius_of_influence=5e3)
-                data_n = resample_data(data[["Rad", "latitude", "longitude"]], swath, radius_of_influence=5e3)
-                channel = data.band_id.data.item()
-                name = f"C{channel:02}"
-                obs_g.append(xr.Dataset({
-                    "channel": channel,
-                    "observations": (("latitude", "longitude"), data_g.Rad.data)
-                }))
-                obs_n.append(xr.Dataset({
-                    "channel": channel,
-                    "observations": (("latitude", "longitude"), data_n.Rad.data)
-                }))
-                del data
-                del data_g
-                del data_n
+            data_g = scene.resample(grid).to_xarray_dataset()
+            obs_g = np.stack([data_g[f"C{ind:02}"].data for ind in range(1, 17)], -1)
+            del data_g
 
-            obs_g = xr.concat(obs_g, dim="channel").sortby("channel").transpose("latitude", "longitude", "channel")
-            obs_n = xr.concat(obs_n, dim="channel").sortby("channel").transpose("latitude", "longitude", "channel")
+            data_n = scene.resample(grid).to_xarray_dataset()
+            obs_n = np.stack([data_n[f"C{ind:02}"].data for ind in range(1, 17)], -1)
+            del data_n
 
-            goes_data_g.append(obs_g.observations.data)
-            goes_data_n.append(obs_n.observations.data)
+            goes_data_g.append(obs_g)
+            goes_data_n.append(obs_n)
             times.append(to_datetime64(recs[0].central_time.start))
-
-            del obs_g
-            del obs_n
 
         finally:
             logging.disable(logging.NOTSET)

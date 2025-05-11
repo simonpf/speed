@@ -157,7 +157,7 @@ def extract_training_data_spatial(
         return 1
 
 
-    collocation_files = sorted(list(collocation_path.glob("*.nc")))
+    collocation_files = sorted(list(collocation_path.glob("*_20200101*.nc")))
 
     if n_processes < 2:
         for collocation_file in track(collocation_files, "Extracting spatial training data:"):

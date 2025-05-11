@@ -294,9 +294,9 @@ def save_data_gridded(
 
     output_file = gridded_path / fname
 
-    encoding = {var: {"compression": "zstd"} for var in preprocessor_data}
+    encoding = {var: {"zlib": True, "complevel": 5} for var in preprocessor_data}
     preprocessor_data.to_netcdf(output_file, group="input_data", encoding=encoding)
-    encoding = {var: {"compression": "zstd"} for var in reference_data}
+    encoding = {var: {"zlib": True, "complevel": 5} for var in reference_data}
     reference_data.to_netcdf(output_file, group="reference_data", mode="a", encoding=encoding)
 
 
@@ -530,7 +530,7 @@ def save_ancillary_data(
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"ancillary_{date_str}.nc"
 
-    output_path = path / "ancillary"
+    output_path = path / "ancillary" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     anc_vars = ANCILLARY_VARIABLES
@@ -562,14 +562,14 @@ def save_input_data(
     month = time.month
     filename = f"{sensor}_{date_str}.nc"
 
-    output_path = path / f"{sensor}" / f"{year:04}" / f"{month:02}"
+    output_path = path / f"{sensor}" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     uint16_max = 2 ** 16 - 1
     int16_min = 2 ** 15
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
-        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "compression": "zstd"},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
+        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
     vars = [
         var for var in ["observations", "earth_incidence_angle"]
@@ -625,7 +625,7 @@ def save_target_data(
     year = time.year
     month = time.month
 
-    output_path = path / "target" / f"{year:04}" / f"{month:02}"
+    output_path = path / "target" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     target_variables = [
@@ -639,21 +639,21 @@ def save_target_data(
 
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
-        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "precipitation_type": {"dtype": "int8", "compression": "zstd"},
-        "total_water_content": {"dtype": "float32", "compression": "zstd"},
-        "rain_water_content": {"dtype": "float32", "compression": "zstd"},
-        "total_water_content": {"dtype": "float32", "compression": "zstd"},
-        "rain_water_path": {"dtype": "float32", "compression": "zstd"},
-        "snow_water_path": {"dtype": "float32", "compression": "zstd"},
-        "latent_heating": {"dtype": "float32", "compression": "zstd"}
+        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
+        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "precipitation_type": {"dtype": "int8", "zlib": True, "complevel": 5},
+        "total_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "rain_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "total_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "rain_water_path": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "snow_water_path": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "latent_heating": {"dtype": "float32", "zlib": True, "complevel": 5}
     }
 
     target_data = reference_data[target_variables]
@@ -680,7 +680,7 @@ def save_geo_data(
     filename = f"geo_{date_str}.nc"
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
     output_path = path / "geo"
     output_path.mkdir(exist_ok=True, parents=True)
@@ -706,7 +706,7 @@ def save_geo_ir_data(
     filename = f"geo_ir_{date_str}.nc"
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
     output_path = path / "geo_ir"
     output_path.mkdir(exist_ok=True, parents=True)
@@ -822,7 +822,7 @@ def extract_scenes(
         time = scan_times[0] + np.median(scan_times - scan_times[0])
         time = to_datetime(time)
 
-        #save_ancillary_data(inpt, time, output_folder)
+        save_ancillary_data(inpt, time, output_folder)
         save_input_data(sensor_name, inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
         if geo_data is not None:
