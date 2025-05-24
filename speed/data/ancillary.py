@@ -134,15 +134,22 @@ def load_era5_ancillary_data(
          the leaf-area index.
     """
     new_names = {
-        "tcwv": "total_column_water_vapor",
-        "t2m": "two_meter_temperature",
         "u10": "ten_meter_wind_u",
         "v10": "ten_meter_wind_v",
+        "d2m": "two_meter_dew_point",
+        "t2m": "two_meter_temperature",
+        "cape": "cape",
+        "siconc": "sea_ice_concentration",
         "sst": "sea_surface_temperature",
         "skt": "skin_temperature",
-        "siconc": "sea_ice_concentration",
         "sd": "snow_depth",
-        "cape": "cape"
+        "sf": "snowfall",
+        "sp": "surface_pressure",
+        "tciw": "total_column_cloud_ice_water",
+        "tclw": "total_column_cloud_liquid_water",
+        "tcwv": "total_column_water_vapor",
+        "tp": "total_precipitation",
+        "cp": "convective_precipitation",
     }
 
     data = []
@@ -642,7 +649,6 @@ def add_ancillary_data(
 
     start_time = scan_time.data.min()
     end_time = scan_time.data.max()
-    print(start_time)
     era5_sfc_files = find_era5_sfc_files(era5_path, start_time, end_time)
     era5_lai_files = find_era5_lai_files(era5_lai_path, start_time, end_time)
     era5_data = load_era5_ancillary_data(
@@ -681,7 +687,6 @@ def add_ancillary_data(
         for var in ancillary_data.variables if var != "surface_type"
     }
     encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
-    print(ancillary_data)
     ancillary_data.to_netcdf(
         path_on_swath,
         group="ancillary_data",
@@ -709,7 +714,6 @@ def add_ancillary_data(
         var: {"dtype": "float32", "compression": "zstd"}
         for var in ancillary_data.variables if var != "surface_type"
     }
-    print(ancillary_data)
     encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
     ancillary_data.to_netcdf(
         path_gridded,
@@ -805,7 +809,7 @@ def cli(
                 )
             )
         with Progress(console=speed.logging.get_console()) as progress:
-            extraction = progress.add_task("Extracting GOES observations:", total=len(tasks))
+            extraction = progress.add_task("Extracting ancillary data:", total=len(tasks))
             for task in as_completed(tasks):
                 try:
                     task.result()

@@ -19,7 +19,7 @@ import xarray as xr
 import click
 
 import speed.logging
-from speed.data import cpcir, goes, ancillary
+from speed.data import cpcir, goes, ancillary, himawari
 
 LOGGER = logging.getLogger(__file__)
 
@@ -130,6 +130,12 @@ def extract_data(
     help="The number of processes to use for the data extraction.",
     default=1
 )
+@click.option(
+    "--pattern",
+    help="Glob pattern used to select input files. ",
+    default="*.nc"
+)
+
 def extract_training_data_spatial(
         collocation_path: str,
         output_folder: str,
@@ -138,7 +144,8 @@ def extract_training_data_spatial(
         min_input_frac: float = None,
         include_geo: bool = False,
         include_geo_ir: bool = False,
-        n_processes: int = 1
+        n_processes: int = 1,
+        pattern: str = "*.nc"
 ) -> int:
     """
     Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes
@@ -157,7 +164,7 @@ def extract_training_data_spatial(
         return 1
 
 
-    collocation_files = sorted(list(collocation_path.glob("*_20200101*.nc")))
+    collocation_files = sorted(list(collocation_path.glob(pattern)))
 
     if n_processes < 2:
         for collocation_file in track(collocation_files, "Extracting spatial training data:"):
@@ -436,4 +443,5 @@ cli.add_command(extract_training_data_tabular, name="extract_training_data_tabul
 cli.add_command(extract_evaluation_data, name="extract_evaluation_data")
 cli.add_command(cpcir.cli, name="extract_cpcir_obs")
 cli.add_command(goes.cli, name="extract_goes_obs")
+cli.add_command(himawari.cli, name="extract_himawari_obs")
 cli.add_command(ancillary.cli, name="add_ancillary_data")

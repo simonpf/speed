@@ -5,6 +5,7 @@ speed.data.utils
 Utility functions for data processing.
 """
 from copy import copy
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Optional, Tuple
 
 from gprof_nn.data.l1c import L1CFile
 from pansat.time import to_datetime
+from tqdm import tqdm
 
 import numpy as np
 from pansat import Granule
@@ -682,7 +684,7 @@ def save_geo_data(
     encoding = {
         "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
-    output_path = path / "geo"
+    output_path = path / "geo" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
     geo_data.to_netcdf(output_path / filename, encoding=encoding)
 
@@ -708,7 +710,7 @@ def save_geo_ir_data(
     encoding = {
         "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
-    output_path = path / "geo_ir"
+    output_path = path / "geo_ir" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
     geo_ir_data = geo_ir_data.rename(tbs_ir="observations")
     geo_ir_data.to_netcdf(output_path / filename, encoding=encoding)
@@ -1302,3 +1304,70 @@ def interp_along_swath(
     ref_data_r["time"].data[invalid_time] = np.datetime64("NaT")
 
     return ref_data_r
+
+
+
+
+
+def copy_file(
+        file_path: Path,
+        input_path: Path,
+        output_path: Path,
+        groups: List[str] = None
+) -> None:
+    """
+    Copy a collocation file from one directory to another.
+
+    Args:
+        file_path: Path pointing to the file to copy.
+        input_path: The root of the input data directory, which is used to calculate
+            the path of the output file relative to the output path.
+        output_path: The root of the output directory.
+        groups: A list containing the names of the groups to copy.
+    """
+    if groups is None:
+        groups = ["input_data", "reference_data", "ancillary_data", "geo", "geo_ir"]
+
+    rel_path = path.relative_to(input_path)
+
+    group_1 = groups[0]
+    data = xr.load_dataset(path, group=group_1)
+    for var in data:
+        data[var].encoding["zlib"] = True
+    data.to_netcdf(output_path / rel_path, group=group_1)
+
+    for group in groups[1:]:
+        data = xr.load_dataset(path, group=group)
+        for var in data:
+            data[var].encoding["zlib"] = True
+            data.to_netcdf(output_path / rel_path, group=group, mode="a")
+
+
+def copy_collocation_files(
+        input_path: Path,
+        output_path: Path,
+        groups: List[str] = None,
+        n_workers: int = 8
+):
+    """
+    Copy collocations from one directory to another ensuring that data is compressed.
+
+    Args:
+        input_path: The directory containing the collocations to copy.
+        output_path: The directory to which to copy the collocations.
+        groups: Which groups to copy.
+        n_workers: The number of workers to use to copy the data.
+    """
+    colloc_files = sorted(list(input_path))
+
+    pool = ProcessPoolExecutor(max_workers=n_workers)
+    tasks = {}
+    for path in colloc_files:
+        task = pool.submit(copy_files, path)
+        tasks[task] = path
+
+    for task in tqdm(as_completed(tasks), total=len(tasks)):
+        try:
+            task.result()
+        except Exception:
+            print("Error processing: ", tasks[task])
