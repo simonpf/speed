@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from gprof_nn.data.l1c import L1CFile
 from pansat.time import to_datetime
@@ -1328,19 +1328,20 @@ def copy_file(
     if groups is None:
         groups = ["input_data", "reference_data", "ancillary_data", "geo", "geo_ir"]
 
-    rel_path = path.relative_to(input_path)
+    rel_path = file_path.relative_to(input_path)
 
     group_1 = groups[0]
-    data = xr.load_dataset(path, group=group_1)
+    data = xr.load_dataset(file_path, group=group_1)
     for var in data:
         data[var].encoding["zlib"] = True
+    (output_path / rel_path).parent.mkdir(exist_ok=True, parents=True)
     data.to_netcdf(output_path / rel_path, group=group_1)
 
     for group in groups[1:]:
-        data = xr.load_dataset(path, group=group)
+        data = xr.load_dataset(file_path, group=group)
         for var in data:
             data[var].encoding["zlib"] = True
-            data.to_netcdf(output_path / rel_path, group=group, mode="a")
+        data.to_netcdf(output_path / rel_path, group=group, mode="a")
 
 
 def copy_collocation_files(
@@ -1358,16 +1359,37 @@ def copy_collocation_files(
         groups: Which groups to copy.
         n_workers: The number of workers to use to copy the data.
     """
-    colloc_files = sorted(list(input_path))
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    colloc_files = sorted(list(input_path.glob("**/*.nc")))
 
     pool = ProcessPoolExecutor(max_workers=n_workers)
     tasks = {}
     for path in colloc_files:
-        task = pool.submit(copy_files, path)
+        task = pool.submit(copy_file, path, input_path, output_path, groups=groups)
         tasks[task] = path
 
     for task in tqdm(as_completed(tasks), total=len(tasks)):
         try:
             task.result()
         except Exception:
-            print("Error processing: ", tasks[task])
+            LOGGER.exception(
+                "Error processing: %s", tasks[task]
+            )
+
+
+def get_median_time(path: Union[Path, str]) -> datetime:
+    """
+    Extract median time from filename.
+
+    Args:
+        path: A Path object or string pointing to a collocation file.
+
+    Return:
+        A datetime object representing the collocations median time.
+    """
+    if isinstance(path, Path):
+        path = path.name
+    date = datetime.strptime(path.split("_")[-1][:-3], "%Y%m%d%H%M%S")
+    return date

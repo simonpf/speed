@@ -126,6 +126,9 @@ class WegenerNet(ReferenceData):
         sensor_longitude = input_data.spacecraft_longitude
         sensor_altitude = input_data.spacecraft_altitude
 
+        if beam_width is None:
+            return results, None
+
         results_fpavg = calculate_footprint_averages(
             wegener_data,
             lons_fp,

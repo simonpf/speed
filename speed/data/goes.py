@@ -99,7 +99,7 @@ def add_goes_obs(
     Args:
         path_on_swath: Path to the file containing the collocations extracted in on_swath format.
         path_gridded: Path to the file containing the collocations extract in gridded format.
-        n_steps: The number 30 minute time steps to extract.
+        n_steps: The number 10 minute time steps to extract.
         sector: A string specifying whether to load the data the full disk or only the CONUS
             sector.
     """
@@ -246,7 +246,7 @@ def cli(
     speed extract_goes collocation_path --n_steps N
 
     Extracts GOES-16 observations for all collocations found in 'collocation_path' in both gridded
-    and on_swath projections. 'N' defines the number of half-hourly time steps centered on the
+    and on_swath projections. 'N' defines the number of 10-minute time steps centered on the
     median overpass time are extracted.
     """
     collocation_path = Path(collocation_path)
