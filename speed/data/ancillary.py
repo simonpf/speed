@@ -159,6 +159,8 @@ def load_era5_ancillary_data(
                 lon_min, lat_min, lon_max, lat_max = roi
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
+                if lon_min > lon_max:
+                    lon_min, lon_max = lon_max, lon_min
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
                 lon_min -= 0.5
@@ -167,7 +169,9 @@ def load_era5_ancillary_data(
                 lat_max += 0.5
                 lon_mask = (lon_min <= lons) * (lons <= lon_max)
                 lat_mask = (lat_min <= lats) * (lats <= lat_max)
+                print(lon_min, lon_max)
                 inpt = inpt[{"longitude": lon_mask, "latitude": lat_mask}]
+                print(inpt)
             data.append(inpt[list(new_names.keys())].rename(**new_names))
 
     data = xr.concat(data, "time")
@@ -626,9 +630,20 @@ def add_ancillary_data(
         gprof_ancillary_dir: Path pointing to the GPROF ancillary dir.
         gprof_ingest_dir: Path pointing to the GPROF ingest dir.
     """
-    sensor = path_on_swath.name.split("_")[1]
-    time_str = path_on_swath.name.split("_")[2][:-3]
+    sensor = path_on_swath.name.split("_")[-2]
+    time_str = path_on_swath.name.split("_")[-1][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
+
+    try:
+        data = xr.open_dataset(path_on_swath, group="ancillary_data")
+        data.close()
+        LOGGER.info(
+            "Skipping input files %s because they already contain ancillary_data observations.",
+            path_on_swath
+        )
+        return None
+    except Exception:
+        pass
 
     with xr.load_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_os = data_on_swath.longitude
@@ -756,13 +771,13 @@ def cli(
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:
-        time_str = f_on_swath.name.split("_")[2][:-3]
+        time_str = f_on_swath.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
-        time_str = f_gridded.name.split("_")[2][:-3]
+        time_str = f_gridded.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
