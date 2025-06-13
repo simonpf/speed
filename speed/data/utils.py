@@ -495,23 +495,24 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
 
 
 ANCILLARY_VARIABLES = [
-    "wet_bulb_temperature",
+    "ten_meter_wind_u",
+    "ten_meter_wind_v",
+    "two_meter_dew_point",
     "two_meter_temperature",
-    "lapse_rate",
-    "total_column_water_vapor",
-    "surface_temperature",
-    "moisture_convergence",
-    "leaf_area_index",
+    "cape",
+    "sea_ice_concentration",
+    "sea_surface_temperature",
+    "skin_temperature",
     "snow_depth",
-    "orographic_wind",
-    "10m_wind",
+    "snowfall",
+    "surface_pressure",
+    "total_column_cloud_ice_water",
+    "total_column_cloud_liquid_water",
+    "total_column_water_vapor",
+    "total_precipitation",
+    "convective_precipitation",
     "surface_type",
-    "mountain_type",
-    "land_fraction",
-    "ice_fraction",
-    "quality_flag",
-    "sunglint_angle",
-    "airlifting_index"
+    "elevation"
 ]
 
 def save_ancillary_data(
@@ -539,8 +540,9 @@ def save_ancillary_data(
     if "latitude" not in input_data.dims:
         anc_vars = copy(anc_vars) + ["latitude", "longitude"]
 
+    encoding = {var: {"dtype": "float32", "zlib": True} for var in anc_file.variables}
     ancillary_data = input_data[anc_vars]
-    ancillary_data.to_netcdf(output_path / filename)
+    ancillary_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
 def save_input_data(
@@ -569,9 +571,15 @@ def save_input_data(
 
     uint16_max = 2 ** 16 - 1
     int16_min = 2 ** 15
+
+    qflag = input_data.quality_flag
+    qflag.data[qflag.data < -128] = -99
+    input_data["quality_flag"] = (("scan", "pixel"), qflag.data.astype("int8"))
+
     encoding = {
         "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
         "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True, "complevel": 5},
+        "quality_flag": {"dtype": "int8", "zlib": True, "complevel": 5},
     }
     vars = [
         var for var in ["observations", "earth_incidence_angle"]
@@ -747,6 +755,8 @@ def extract_scenes(
     sensor_name = collocation_file.name.split("_")[1]
     input_data = xr.load_dataset(collocation_file, group="input_data")
     reference_data = xr.load_dataset(collocation_file, group="reference_data")
+    ancillary_data = xr.load_dataset(collocation_file, group="ancillary_data")
+
     if include_geo:
         geo_data = xr.load_dataset(collocation_file, group="geo")
         if "scans" in geo_data.dims:
@@ -795,6 +805,7 @@ def extract_scenes(
         slices = [slice(row_start, row_end), slice(col_start, col_end)]
 
         inpt = input_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
+        anc = ancillary_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
         ref = reference_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
 
         valid_input_frac = valid_input[slices[0], slices[1]].mean()
@@ -811,11 +822,15 @@ def extract_scenes(
         if "lower_lef_col" in inpt.attrs:
             inpt.attrs["lower_left_col"] += col_start
             inpt.attrs["lower_left_row"] += row_start
+            anc.attrs["lower_left_col"] = inpt.attrs["lower_left_col"]
+            anc.attrs["lower_left_row"] = inpt.attrs["lower_left_row"]
             ref.attrs["lower_left_col"] += col_start
             ref.attrs["lower_left_row"] += row_start
         if "scan_start" in inpt.attrs:
             inpt.attrs["scan_start"] += row_start
             inpt.attrs["scan_end"] = inpt.attrs["scan_start"] + row_end
+            anc.attrs["scan_start"] = inpt.attrs["scan_start"]
+            anc.attrs["scan_end"] = inpt.attrs["scan_end"]
             inpt.attrs["pixel_start"] = col_start
             inpt.attrs["pixel_end"] = col_end
 
@@ -824,7 +839,7 @@ def extract_scenes(
         time = scan_times[0] + np.median(scan_times - scan_times[0])
         time = to_datetime(time)
 
-        save_ancillary_data(inpt, time, output_folder)
+        save_ancillary_data(anc, time, output_folder)
         save_input_data(sensor_name, inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
         if geo_data is not None:
