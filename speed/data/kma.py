@@ -136,17 +136,20 @@ class KMAData(ReferenceData):
         input_files = []
 
         input_data = input_granule.open()
-        if "latitude_s1" in input_data:
+        if "pixels_s1" in input_data:
             input_data = input_data.rename(
                 scans="scan",
-                pixels="pixel",
-                latitude_s1="latitude",
-                longitude_s1="longitude"
+                pixels_s1="pixel",
             )
         else:
             input_data = input_data.rename(
                 scans="scan",
                 pixels="pixel",
+            )
+        if "latitude_s1" in input_data:
+            input_data = input_data.rename(
+                latitude_s1="latitude",
+                longitude_s1="longitude"
             )
 
         input_data = input_data[[
