@@ -38,7 +38,7 @@ def add_cpcir_obs(
         path_gridded: Path to the file containing the collocations extract in gridded format.
         n_steps: The number 30 minute time steps to extract.
     """
-    time_str = path_on_swath.name.split("_")[2][:-3]
+    time_str = path_on_swath.name.split("_")[-1][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
     rounded = round_time(median_time, np.timedelta64(30, "m"))
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * np.timedelta64("30", "m")
@@ -138,13 +138,13 @@ def cli(
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:
-        time_str = f_on_swath.name.split("_")[2][:-3]
+        time_str = f_on_swath.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
-        time_str = f_gridded.name.split("_")[2][:-3]
+        time_str = f_gridded.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
