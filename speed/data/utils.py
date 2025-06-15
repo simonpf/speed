@@ -516,7 +516,7 @@ ANCILLARY_VARIABLES = [
 ]
 
 def save_ancillary_data(
-        input_data: xr.Dataset,
+        anc_data: xr.Dataset,
         time: datetime,
         path: Path
 ) -> None:
@@ -524,7 +524,7 @@ def save_ancillary_data(
     Save ancillary data in separate folder.
 
     Args:
-        input_data: A xarray.Dataset containing all retrieval input data
+        anc_data: A xarray.Dataset containing all retrieval input data
             for a single training scene.
         time: The median time of the scene.
         path: The base folder in which to store the extracted training
@@ -537,11 +537,11 @@ def save_ancillary_data(
     output_path.mkdir(exist_ok=True, parents=True)
 
     anc_vars = ANCILLARY_VARIABLES
-    if "latitude" not in input_data.dims:
+    if "latitude" not in anc_data.dims:
         anc_vars = copy(anc_vars) + ["latitude", "longitude"]
 
-    encoding = {var: {"dtype": "float32", "zlib": True} for var in anc_file.variables}
-    ancillary_data = input_data[anc_vars]
+    encoding = {var: {"dtype": "float32", "zlib": True} for var in anc_data.variables}
+    ancillary_data = anc_data[anc_vars]
     ancillary_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
@@ -896,7 +896,6 @@ def extract_evaluation_data(
     time_str = parts[-1][:-3]
     time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
 
-
     with xr.load_dataset(collocation_file_gridded, group="input_data") as input_data:
         n_lats = input_data.sizes["latitude"]
         n_lons = input_data.sizes["longitude"]
@@ -919,25 +918,20 @@ def extract_evaluation_data(
     input_data = xr.load_dataset(collocation_file_on_swath, group="input_data")
     input_data.attrs["gpm_input_file"] = input_data.attrs.pop("gpm_input_file")
     reference_data = xr.load_dataset(collocation_file_on_swath, group="reference_data")
-    save_ancillary_data(input_data, time, output_folder / "on_swath")
+    ancillary_data = xr.load_dataset(collocation_file_on_swath, group="ancillary_data")
+
+    save_ancillary_data(ancillary_data, time, output_folder / "on_swath")
     save_input_data(sensor_name, input_data, time, output_folder / "on_swath")
     save_target_data(reference_data, time, output_folder / "on_swath")
-
-    #surface_precip_fpavg = reference_data.surface_precip_fpavg
-    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
-    pixel_inds = reference_data.pixel_index
-    scan_inds = reference_data.scan_index
-    #surface_precip_fpavg = surface_precip_fpavg[{"scans": scan_inds, "pixels": pixel_inds}]
-    #invalid = scan_inds.data < 0
-    #surface_precip_fpavg.data[invalid] = np.nan
-    #reference_data["surface_precip_fpavg"] = surface_precip_fpavg
 
     gpm_input_file = input_data.attrs["gpm_input_file"]
 
     # Extract gridded data.
     input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
+    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    ancillary_data = xr.load_dataset(collocation_file_on_gridded, group="ancillary_data")
     input_data.attrs["gpm_input_file"] = gpm_input_file
-    save_ancillary_data(input_data, time, output_folder / "gridded")
+    save_ancillary_data(ancillary_data, time, output_folder / "gridded")
     save_input_data(sensor_name, input_data, time, output_folder / "gridded")
     save_target_data(
         reference_data,
@@ -1363,7 +1357,8 @@ def copy_collocation_files(
         input_path: Path,
         output_path: Path,
         groups: List[str] = None,
-        n_workers: int = 8
+        n_workers: int = 8,
+        glob_pattern: str = "**/*.nc"
 ):
     """
     Copy collocations from one directory to another ensuring that data is compressed.
@@ -1377,7 +1372,7 @@ def copy_collocation_files(
     input_path = Path(input_path)
     output_path = Path(output_path)
 
-    colloc_files = sorted(list(input_path.glob("**/*.nc")))
+    colloc_files = sorted(list(input_path.glob(glob_pattern)))
 
     pool = ProcessPoolExecutor(max_workers=n_workers)
     tasks = {}
