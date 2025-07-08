@@ -122,7 +122,11 @@ def load_l1c_brightness_temperatures(
         lats = l1c_data.latitude.data
         lons = l1c_data.longitude.data
         if lats.shape == lats_p.shape:
-            return l1c_data.tbs
+            tbs = l1c_data.tbs.data
+            eia = l1c_data.incidence_angle.data
+            if eia.ndim < tbs.ndim:
+                eia = np.broadcast_to(eia[..., None], tbs.shape)
+            return tbs, eia
 
         source = SwathDefinition(lons=lons, lats=lats)
         target = SwathDefinition(lons=lons_p, lats=lats_p)
