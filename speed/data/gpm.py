@@ -20,6 +20,7 @@ from pansat import FileRecord, TimeRange, Granule
 from pansat.environment import get_index
 from pansat.products.satellite.gpm import (
     merged_ir,
+    l1c_f16_ssmis,
     l1c_metopa_mhs,
     l1c_metopb_mhs,
     l1c_metopc_mhs,
@@ -509,3 +510,6 @@ amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)
 
 ATMS_PRODUCTS = [l1c_noaa20_atms]
 atms = GPMInput("atms", ATMS_PRODUCTS, beam_width=None, radius_of_influence=64e3)
+
+SSMIS_PRODUCTS = [l1c_f16_ssmis]
+ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)
