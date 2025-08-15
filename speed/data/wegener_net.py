@@ -71,7 +71,15 @@ class WegenerNet(ReferenceData):
         coords = input_granule.geometry.bounding_box_corners
         lon_min, lat_min, lon_max, lat_max = coords
 
-        wegener_data = [granule.open() for granule in granules]
+        wegener_data = []
+        for granule in granules:
+            try:
+                station_data = granule.open()
+                if "latitude" in station_data.dims:
+                    continue
+                wegener_data.append(station_data)
+            except ValueError:
+                continue
         wegener_data = xr.concat(wegener_data, dim="station")
 
         lons_g = GLOBAL.lons.copy()
@@ -100,7 +108,7 @@ class WegenerNet(ReferenceData):
         surface_precip = binned_statistic_2d(
             wegener_data.latitude.data,
             wegener_data.longitude.data,
-            wegener_data.surface_precip.data,
+            2.0 * wegener_data.surface_precip.data, # This is half-hourly data.
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
 
