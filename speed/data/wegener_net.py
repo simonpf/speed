@@ -82,7 +82,7 @@ class WegenerNet(ReferenceData):
                 continue
         wegener_data = xr.concat(wegener_data, dim="station")
         invalid = 0.0 < wegener_data.flagged_percentage
-        wegener_net.surface_precip.data[invalid] = np.nan
+        wegener_data.surface_precip.data[invalid] = np.nan
 
         lons_g = GLOBAL.lons.copy()
         lats_g = GLOBAL.lats.copy()
