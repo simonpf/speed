@@ -9,7 +9,7 @@ import pytest
 from speed.data.combined import run_mirs, gpm_cmb
 
 try:
-    from gprof_nn.data import mirs
+    from gprof_nn.data import mirs  # noqa: F401
     HAS_MIRS = True
 except ImportError:
     HAS_MIRS = False

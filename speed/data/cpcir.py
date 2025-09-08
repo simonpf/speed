@@ -5,7 +5,7 @@ speed.data.cpcir
 This module contains functionality to add CPCIR (MERGEDIR) observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from pyresample.geometry import SwathDefinition
 from rich.progress import Progress
 import xarray as xr
 
-from speed.data.utils import resample_data, round_time
+from speed.data.utils import round_time
 
 
 LOGGER = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def add_cpcir_obs(
         lon_min_s, lon_max_s = lons_s.min(), lons_s.max()
         lat_min_s, lat_max_s = lats_s.min(), lats_s.max()
 
-    swath = SwathDefinition(lons=lons_s, lats=lats_s)
+    SwathDefinition(lons=lons_s, lats=lats_s)
 
     cpcir_data_g = []
     cpcir_data_s = []
@@ -171,7 +171,7 @@ def cli(
                     task.result()
                 except KeyboardInterrupt as exc:
                     raise exc
-                except Exception as exc:
+                except Exception:
                     LOGGER.exception(
                         "Encountered an error when processing collocation with median overpass time %s.",
                         median_time

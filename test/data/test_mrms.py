@@ -2,14 +2,8 @@
 Tests for the speed.data.mrms module.
 =====================================
 """
-import pytest
 
-import numpy as np
-from pansat import TimeRange
-from pansat.products.ground_based import mrms
-import pansat.environment as penv
 
-from speed.grids import GLOBAL
 from speed.data.mrms import (
     load_mrms_data,
     downsample_mrms_data,

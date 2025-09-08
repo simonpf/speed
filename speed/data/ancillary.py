@@ -300,7 +300,6 @@ def load_emissivity_data(ancillary_dir: Path, date: np.datetime64) -> xr.DataArr
     month = to_datetime(date).month
     emiss_file = ancillary_dir / f"emiss_class_{month:02}.dat"
 
-    emiss = []
     n_lons = 720
     n_lats = 359
 
@@ -338,7 +337,6 @@ def load_emissivity_data_all_months(ancillary_dir: Path) -> xr.DataArray:
     Return:
          An xr.DataArray containing the data loaded from the file.
     """
-    emiss = []
     n_lons = 720
     n_lats = 359
 

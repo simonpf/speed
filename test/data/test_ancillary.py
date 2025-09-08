@@ -119,23 +119,23 @@ def test_find_autosnow_file():
 def test_load_autosnow_file():
     date = np.datetime64("2020-01-01T01:15:00")
     autosnow_file = find_autosnow_file(INGEST_DIR, date)
-    autosnow_data = load_autosnow_data(autosnow_file)
+    load_autosnow_data(autosnow_file)
 
 
 @NEEDS_ANCILLARY_DATA
 def test_load_landmask_data():
-    ancillary_data = load_landmask_data(ANCILLARY_DIR)
+    load_landmask_data(ANCILLARY_DIR)
 
 
 @NEEDS_ANCILLARY_DATA
 def test_load_emissivity_data():
-    ancillary_data = load_emissivity_data(ANCILLARY_DIR, np.datetime64("2020-01-01T00:00:00"))
+    load_emissivity_data(ANCILLARY_DIR, np.datetime64("2020-01-01T00:00:00"))
 
 
 @NEEDS_ANCILLARY_DATA
 @NEEDS_INGEST_DATA
 def test_load_gprof_surface_type_data():
-    ancillary_data = load_gprof_surface_type_data(
+    load_gprof_surface_type_data(
         ANCILLARY_DIR,
         INGEST_DIR,
         np.datetime64("2020-01-01T00:00:00")

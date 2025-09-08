@@ -6,12 +6,11 @@ This module provides functionality to extract collocations with the AMeDAS
 ground-based radar data.
 """
 import logging
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional
 import warnings
 
 import numpy as np
 from pansat.products.ground_based import amedas
-from pansat.geometry import LonLatRect
 from pansat.granule import Granule
 from scipy.signal import convolve
 from pyresample.geometry import SwathDefinition
@@ -20,8 +19,6 @@ from speed.data.reference import ReferenceData
 from speed.grids import GLOBAL
 from speed.data.utils import (
     get_smoothing_kernel,
-    extract_rect,
-    calculate_footprint_averages,
     resample_data,
     interp_along_swath
 )
@@ -80,8 +77,6 @@ def extract_collocation_data(amedas_data: xr.Dataset) -> xr.Dataset:
     stratiform_fraction = np.zeros_like(precip_fraction)
     hail_fraction = np.zeros_like(precip_fraction)
 
-    lower_left_row = None
-    lower_left_col = None
 
     dims = (("latitude", "longitude"))
     data = xr.Dataset({
@@ -258,9 +253,7 @@ class AMeDASData(ReferenceData):
         lon_end = min(valid_lons.max() + 64, lons.size - 1)
         lat_start = max(valid_lats.min() - 64, 0)
         lat_end = min(valid_lats.max() + 64, lats.size - 1)
-        grid = GLOBAL.grid[lat_start:lat_end, lon_start:lon_end]
-        lower_left_row = lat_start
-        lower_left_col = lon_start
+        GLOBAL.grid[lat_start:lat_end, lon_start:lon_end]
         amedas_data["time"] = amedas_data.time.astype(np.int64)
         amedas_data = amedas_data.interp(
             latitude=lats[lat_start:lat_end],
@@ -287,4 +280,4 @@ class AMeDASData(ReferenceData):
 
 
 
-amedas = AMeDASData()
+amedas_data = AMeDASData()

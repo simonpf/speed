@@ -5,16 +5,12 @@ speed.data.himawari
 This module contains functionality to add HIMAWARI 9 observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Dict, List
-import warnings
 
 import click
 import numpy as np
-from pansat import TimeRange, FileRecord
 from pansat.time import to_datetime64
 from pansat.utils import resample_data
 from pansat.products.satellite.himawari import (
@@ -78,9 +74,9 @@ def add_himawari_obs(
 
     with xr.open_dataset(path_gridded, group="input_data") as data_gridded:
         lons_g = data_gridded.longitude.data
-        lon_min_g, lon_max_g = lons_g.min(), lons_g.max()
+        _lon_min_g, _lon_max_g = lons_g.min(), lons_g.max()
         lats_g = data_gridded.latitude.data
-        lat_min_g, lat_max_g = lats_g.min(), lats_g.max()
+        _lat_min_g, _lat_max_g = lats_g.min(), lats_g.max()
     del data_gridded
 
     with xr.open_dataset(path_on_swath, group="input_data") as data_on_swath:

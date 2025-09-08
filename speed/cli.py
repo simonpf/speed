@@ -1,5 +1,6 @@
 """
-speed.cli
+speed.cli.
+
 =========
 
 The command line interface of SPEED.
@@ -18,7 +19,6 @@ import xarray as xr
 
 import click
 
-import speed.logging
 from speed.data import cpcir, goes, ancillary, himawari
 
 LOGGER = logging.getLogger(__file__)
@@ -26,6 +26,7 @@ LOGGER = logging.getLogger(__file__)
 
 @click.group()
 def cli():
+    """SPEED command line interface for satellite precipitation estimation evaluation."""
     pass
 
 
@@ -52,19 +53,9 @@ def extract_data(
         days: List[int],
         n_processes: int = 1
 ):
-    """
-    Extract collocations for a given date.
-    """
+    """Extract collocations for a given date."""
     from speed.data.input import get_input_dataset
     from speed.data.reference import get_reference_dataset
-    import speed.data.gpm
-    import speed.data.mrms
-    import speed.data.gpm_gv
-    import speed.data.combined
-    import speed.data.noaa
-    import speed.data.wegener_net
-    import speed.data.amedas
-    import speed.data.kma
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:
@@ -87,7 +78,7 @@ def extract_data(
                 LOGGER.exception(exc)
     else:
         pool = ProcessPoolExecutor(max_workers=n_processes)
-        manager = multiprocessing.Manager()
+        multiprocessing.Manager()
 
         tasks = {}
         for day in days:
@@ -148,8 +139,9 @@ def extract_training_data_spatial(
         pattern: str = "*.nc"
 ) -> int:
     """
-    Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes
-    to OUTPUT_FOLDER.
+    Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes to OUTPUT_FOLDER.
+    
+    Extracts spatial scenes from collocation files for training machine learning models.
     """
     from speed.data.utils import extract_scenes
 
@@ -184,7 +176,7 @@ def extract_training_data_spatial(
                 )
     else:
         pool = ProcessPoolExecutor(max_workers=n_processes)
-        manager = multiprocessing.Manager()
+        multiprocessing.Manager()
         tasks = {}
         for collocation_file in collocation_files:
             task = pool.submit(
@@ -201,7 +193,7 @@ def extract_training_data_spatial(
         for task in track(tasks, "Extracting spatial training data:"):
             try:
                 task.result()
-            except Exception as exc:
+            except Exception:
                 LOGGER.exception(
                     "Encountered an error processing target file %s.",
                     collocation_file
@@ -224,8 +216,9 @@ def extract_training_data_tabular(
         subsample: Optional[float] = None
 ) -> int:
     """
-    Extract tabular training data from collocations in COLLOCATION_PATH and write resulting files
-    to OUTPUT_FOLDER.
+    Extract tabular training data from collocations in COLLOCATION_PATH and write resulting files to OUTPUT_FOLDER.
+    
+    Extracts flattened tabular data from collocation files for training tabular models.
     """
     from speed.data.utils import extract_training_data
 
@@ -282,7 +275,6 @@ def extract_training_data_tabular(
     target_data = xr.concat(target_data, dim="samples")
 
     uint16_max = 2 ** 16 - 1
-    int16_min = 2 ** 15
 
     encoding = {
         "observations": {
@@ -385,9 +377,7 @@ def extract_evaluation_data(
         include_geo_ir: bool = False,
         glob_pattern: str = "*.nc"
 ) -> int:
-    """
-    Extract evaluation data in COLLOCATION_PATH and write scenes to OUTPUT_FOLDER.
-    """
+    """Extract evaluation data in COLLOCATION_PATH and write scenes to OUTPUT_FOLDER."""
     from speed.data.utils import extract_evaluation_data
 
     output_folder = Path(output_folder)

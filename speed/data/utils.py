@@ -1,5 +1,6 @@
 """
-speed.data.utils
+speed.data.utils.
+
 ================
 
 Utility functions for data processing.
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from gprof_nn.data.l1c import L1CFile
-from pansat.time import to_datetime
+from pansat.time import to_datetime, to_datetime64, to_timedelta64
 from tqdm import tqdm
 
 import numpy as np
@@ -34,7 +35,7 @@ def get_smoothing_kernel(fwhm: float, grid_resolution: float) -> np.ndarray:
         fwhm: The full width at half maximum of the kernel.
         grid_resolution: The resolution of the underlying grid.
 
-    Return:
+    Returns:
         A numpy.ndarray containing the convolution kernel.
     """
     fwhm_n = fwhm / grid_resolution
@@ -423,7 +424,6 @@ def calculate_grid_resample_indices(dataset, target_grid):
     ind_in, ind_out, inds, _ = info
 
     dims = ("scan", "pixel")
-    resampled = {}
 
     row_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", swath.shape, row_inds, ind_in, ind_out, inds, fill_value=-1
@@ -472,7 +472,6 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
     ind_in, ind_out, inds, _ = info
 
     dims = ("latitude", "longitude")
-    resampled = {}
 
     scan_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", target.shape, scan_inds, ind_in, ind_out, inds, fill_value=-1
@@ -562,15 +561,12 @@ def save_input_data(
             scenes.
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
-    year = time.year
-    month = time.month
     filename = f"{sensor}_{date_str}.nc"
 
     output_path = path / f"{sensor}" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     uint16_max = 2 ** 16 - 1
-    int16_min = 2 ** 15
 
     qflag = input_data.quality_flag
     qflag.data[qflag.data < -128] = -99
@@ -632,8 +628,6 @@ def save_target_data(
     """
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"target_{date_str}.nc"
-    year = time.year
-    month = time.month
 
     output_path = path / "target" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
@@ -660,7 +654,6 @@ def save_target_data(
         "precipitation_type": {"dtype": "int8", "zlib": True, "complevel": 5},
         "total_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
         "rain_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
-        "total_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
         "rain_water_path": {"dtype": "float32", "zlib": True, "complevel": 5},
         "snow_water_path": {"dtype": "float32", "zlib": True, "complevel": 5},
         "latent_heating": {"dtype": "float32", "zlib": True, "complevel": 5}
@@ -883,9 +876,9 @@ def extract_evaluation_data(
 
     Args:
         collocation_file_gridded: A path pointing to a file containing a SPEED collocation
-            in on_swath sampling.
-        collocation_file_gridded: A path pointing to a file containing a SPEED collocation
             in regridded format.
+        collocation_file_on_swath: A path pointing to a file containing a SPEED collocation
+            in on_swath sampling.
         output_folder: The folder to which to write the extracted scenes.
         include_geo: If 'True', will extract GEO observations for all evaluation scenes.
         include_geo_ir: If 'True', will extract GEO IR observations for all evaluation scenes.
@@ -929,7 +922,7 @@ def extract_evaluation_data(
     # Extract gridded data.
     input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
     reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
-    ancillary_data = xr.load_dataset(collocation_file_on_gridded, group="ancillary_data")
+    ancillary_data = xr.load_dataset(collocation_file_gridded, group="ancillary_data")
     input_data.attrs["gpm_input_file"] = gpm_input_file
     save_ancillary_data(ancillary_data, time, output_folder / "gridded")
     save_input_data(sensor_name, input_data, time, output_folder / "gridded")
@@ -1313,10 +1306,6 @@ def interp_along_swath(
     ref_data_r["time"].data[invalid_time] = np.datetime64("NaT")
 
     return ref_data_r
-
-
-
-
 
 def copy_file(
         file_path: Path,

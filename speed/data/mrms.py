@@ -7,15 +7,13 @@ Multi-Radar Multi-Sensor (MRMS) ground-based radar estimates.
 """
 
 import logging
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Union
 import warnings
 
-import dask.array as da
 import numpy as np
-from pansat import FileRecord, TimeRange, Granule
+from pansat import Granule
 from pansat.products.ground_based import mrms
 from pyresample.geometry import AreaDefinition, SwathDefinition
-from pansat.catalog import Index
 from scipy.signal import convolve
 import xarray as xr
 
@@ -23,7 +21,6 @@ from speed.data.reference import ReferenceData
 from speed.grids import GLOBAL
 from speed.data.utils import (
     get_smoothing_kernel,
-    extract_rect,
     calculate_footprint_averages,
     resample_data,
     interp_along_swath,
@@ -80,32 +77,6 @@ def resample_scalar(data: xr.DataArray) -> xr.DataArray:
     return data_g
 
 
-def resample_categorical(data: xr.DataArray, classes) -> xr.DataArray:
-    """
-    Resamples categorical data (such as the MRMS precip) using the
-    bucket resampler.
-
-    Args:
-        data: A xarray.DataArray containing the data
-            to resample.
-
-    Return:
-        A xr.DataArray containing the resampled data.
-    """
-    data_r = data.interp(
-        latitude=GLOBAL.lats,
-        longitude=GLOBAL.lons,
-        method="nearest",
-        kwargs={"fill_value": -3},
-    )
-
-    precip_class_repr = ""
-    for value, name in PRECIP_CLASSES.items():
-        precip_class_repr += f"{value} = {name}"
-    data_r.attrs["classes"] = precip_class_repr
-
-    return data_r
-
 
 def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
     """
@@ -121,7 +92,6 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
     input_files = []
     precip_rate_rec = granule.file_record
     precip_rate_rec = precip_rate_rec.get()
-    time_range = precip_rate_rec.temporal_coverage
 
     # Load and resample precip rate.
     precip_data = mrms.precip_rate.open(precip_rate_rec)
@@ -505,7 +475,6 @@ class MRMS(ReferenceData):
         coords = input_granule.geometry.bounding_box_corners
         lon_min, lat_min, lon_max, lat_max = coords
 
-        ref_data = []
 
         col_start = None
         col_end = None

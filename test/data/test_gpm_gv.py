@@ -2,14 +2,9 @@
 Tests for the speed.data.gpm_gv module.
 =====================================
 """
-import pytest
 
 import numpy as np
-from pansat import TimeRange
-from pansat.products.ground_based import mrms
-import pansat.environment as penv
 
-from speed.grids import GLOBAL
 from speed.data.gpm_gv import (
     load_gv_data,
     gv_data_gpm

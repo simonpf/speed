@@ -5,19 +5,16 @@ speed.data.goes
 This module contains functionality to add GOES 16 observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 import gc
 import logging
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, List
-import warnings
 
 import click
 import numpy as np
 from pansat import TimeRange, FileRecord
 from pansat.time import to_datetime64
-from pansat.utils import resample_data
 from pansat.products.satellite.goes import (
     GOES16L1BRadiances
 )
@@ -138,20 +135,20 @@ def add_goes_obs(
 
     with xr.open_dataset(path_gridded, group="input_data") as data_gridded:
         lons_g = data_gridded.longitude.data
-        lon_min_g, lon_max_g = lons_g.min(), lons_g.max()
+        _lon_min_g, _lon_max_g = lons_g.min(), lons_g.max()
         lats_g = data_gridded.latitude.data
-        lat_min_g, lat_max_g = lats_g.min(), lats_g.max()
+        _lat_min_g, _lat_max_g = lats_g.min(), lats_g.max()
     del data_gridded
 
     with xr.open_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_n = data_on_swath.longitude.data
         lats_n = data_on_swath.latitude.data
-        lat_min, lat_max = lats_g.min(), lats_g.max()
+        _lat_min, _lat_max = lats_g.min(), lats_g.max()
     del data_on_swath
 
     lons, lats = np.meshgrid(lons_g, lats_g)
     grid = SwathDefinition(xr.DataArray(lons), xr.DataArray(lats))
-    swath = SwathDefinition(lons=xr.DataArray(lons_n), lats=xr.DataArray(lats_n))
+    SwathDefinition(lons=xr.DataArray(lons_n), lats=xr.DataArray(lats_n))
 
     goes_data_g = []
     goes_data_n = []

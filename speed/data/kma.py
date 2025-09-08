@@ -6,12 +6,11 @@ This module provides functionality to extract collocations with the KMA
 ground-based radar data.
 """
 import logging
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional
 import warnings
 
 import numpy as np
 from pansat.products.ground_based import kma
-from pansat.geometry import LonLatRect
 from pansat.granule import Granule
 from scipy.signal import convolve
 from pyresample.geometry import SwathDefinition
@@ -20,8 +19,6 @@ from speed.data.reference import ReferenceData
 from speed.grids import GLOBAL
 from speed.data.utils import (
     get_smoothing_kernel,
-    extract_rect,
-    calculate_footprint_averages,
     resample_data,
     interp_along_swath
 )
@@ -83,8 +80,6 @@ def extract_collocation_data(kma_data: xr.Dataset) -> xr.Dataset:
     stratiform_fraction = np.zeros_like(precip_fraction)
     hail_fraction = np.zeros_like(precip_fraction)
 
-    lower_left_row = None
-    lower_left_col = None
 
     dims = (("y", "x"))
     data = xr.Dataset({
@@ -226,7 +221,6 @@ class KMAData(ReferenceData):
         area = SwathDefinition(lons=lons, lats=lats)
 
         scan_time, _ = xr.broadcast(input_data.scan_time, input_data.latitude)
-        dtype = scan_time.dtype
         input_data["scan_time"] = scan_time.astype("int64")
         scan_time = resample_data(
             input_data,
@@ -261,8 +255,6 @@ class KMAData(ReferenceData):
         lat_start = max(valid_lats.min() - 64, 0)
         lat_end = min(valid_lats.max() + 64, lats.size - 1)
         grid = GLOBAL.grid[lat_start:lat_end, lon_start:lon_end]
-        lower_left_row = lat_start
-        lower_left_col = lon_start
 
         kma_data = kma_data.reset_coords(["time"])
         kma_data["time"] = kma_data.time.astype(np.int64)
@@ -291,4 +283,4 @@ class KMAData(ReferenceData):
 
 
 
-kma = KMAData()
+kma_data = KMAData()

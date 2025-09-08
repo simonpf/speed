@@ -1,4 +1,3 @@
-from datetime import datetime
 import os
 
 import pytest
@@ -34,7 +33,7 @@ NEEDS_PANSAT_PASSWORD = pytest.mark.skipif(
 def gpm_mrms_files(scope="session"):
     start_time = "2020-01-01T00:00:00"
     end_time = "2020-01-02T00:00:00"
-    time_range = TimeRange(start_time, end_time)
+    TimeRange(start_time, end_time)
 
 
 @pytest.fixture

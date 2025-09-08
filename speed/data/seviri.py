@@ -6,17 +6,15 @@ speed.data.seviri
 This module contains functionality to add MSG SEVIRI observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 import gc
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, List
-import warnings
 
 import click
 import numpy as np
-from pansat import TimeRange, FileRecord
+from pansat import TimeRange
 from pansat.time import to_datetime64
 from pansat.utils import resample_data
 from pansat.products.satellite.meteosat import (
@@ -24,10 +22,9 @@ from pansat.products.satellite.meteosat import (
 )
 from pyresample.geometry import SwathDefinition
 from rich.progress import track, Progress
-from satpy import Scene
 import xarray as xr
 
-from speed.data.utils import round_time,
+from speed.data.utils import round_time, get_median_time
 import speed.logging
 
 
@@ -69,6 +66,7 @@ def add_seviri_obs(
     )
 
     median_time = get_median_time(path_on_swath)
+    time_str = median_time.strftime("%Y%m%d%H%M%S")
     rounded = to_datetime64(round_time(median_time, time_step))
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * time_step
     time_steps = rounded + offsets
@@ -81,15 +79,15 @@ def add_seviri_obs(
 
     with xr.open_dataset(path_gridded, group="input_data") as data_gridded:
         lons_g = data_gridded.longitude.data
-        lon_min_g, lon_max_g = lons_g.min(), lons_g.max()
+        _lon_min_g, _lon_max_g = lons_g.min(), lons_g.max()
         lats_g = data_gridded.latitude.data
-        lat_min_g, lat_max_g = lats_g.min(), lats_g.max()
+        _lat_min_g, _lat_max_g = lats_g.min(), lats_g.max()
     del data_gridded
 
     with xr.open_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_n = data_on_swath.longitude.data
         lats_n = data_on_swath.latitude.data
-        lat_min, lat_max = lats_g.min(), lats_g.max()
+        _lat_min, _lat_max = lats_g.min(), lats_g.max()
     del data_on_swath
 
     lons, lats = np.meshgrid(lons_g, lats_g)
@@ -102,32 +100,33 @@ def add_seviri_obs(
 
     for time, seviri_rec in zip(time_steps, seviri_recs):
 
-        seviri_data = l1b_rs_msg_seviri.open(seviri_rec)
+        with TemporaryDirectory():
+            seviri_data = l1b_rs_msg_seviri.open(seviri_rec)
 
-        hrv = data.HRV.coarsen({"latitude_0": 2 ,"longitude_0": 2}).mean()
-        seviri_data = seviri_data.drop_vars("hrv")
-        seviri_data["HRV"] = (("y_1", "x_1"), hrv.data)
-        seviri_data = seviri_data.rename({
-            "latitude_1": "latitude",
-            "longitude_1": "longitude",
-        })
+            hrv = data.HRV.coarsen({"latitude_0": 2 ,"longitude_0": 2}).mean()
+            seviri_data = seviri_data.drop_vars("hrv")
+            seviri_data["HRV"] = (("y_1", "x_1"), hrv.data)
+            seviri_data = seviri_data.rename({
+                "latitude_1": "latitude",
+                "longitude_1": "longitude",
+            })
 
-        seviri_channels = [
-            "HRV", "VIS006", "VIS008", "IR_016", "IR_039", "WV_062", "WV_073", "IR_087",
-            "IR_097", "IR_108", "IR_120", "IR_134"
-        ]
+            seviri_channels = [
+                "HRV", "VIS006", "VIS008", "IR_016", "IR_039", "WV_062", "WV_073", "IR_087",
+                "IR_097", "IR_108", "IR_120", "IR_134"
+            ]
 
-        data_g = resample_data(seviri_data, grid)
-        obs_g = np.stack([data_g[chan].data for chan in seviri_channels])
-        seviri_data_g.append(obs_g)
-        del data_g
+            data_g = resample_data(seviri_data, grid)
+            obs_g = np.stack([data_g[chan].data for chan in seviri_channels])
+            seviri_data_g.append(obs_g)
+            del data_g
 
-        data_s = resample_data(seviri_data, swath)
-        obs_s = np.stack([data_s[chan].data for chan in seviri_channels])
-        seviri_data_s.append(obs_s)
-        del data_s
+            data_s = resample_data(seviri_data, swath)
+            obs_s = np.stack([data_s[chan].data for chan in seviri_channels])
+            seviri_data_s.append(obs_s)
+            del data_s
 
-        times.append(time)
+            times.append(time)
 
 
     times = np.array(times)
@@ -170,7 +169,7 @@ def add_seviri_obs(
 
     del times
     del seviri_data_g
-    del seviri_data_n
+    del seviri_data_s
     gc.collect()
 
 

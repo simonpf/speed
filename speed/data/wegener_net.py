@@ -6,7 +6,7 @@ This module provides functionality to extract collocations with the WegenerNet
 ground-station data.
 """
 import logging
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional
 
 import numpy as np
 from pansat.products.stations.wegener_net import station_data, get_station_data
