@@ -110,8 +110,12 @@ def add_goes_obs(
             path_on_swath
         )
         return None
-    except Exception:
-        pass
+    except (KeyError, ValueError):
+        # No geo group exists yet, proceed with processing
+        LOGGER.debug("No existing geo data found in %s, proceeding with processing", path_on_swath)
+    except Exception as e:
+        LOGGER.warning("Error checking for existing geo data in %s: %s", path_on_swath, e)
+        # Continue processing despite check failure
 
     LOGGER.info(
         "Processing %s.",

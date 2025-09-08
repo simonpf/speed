@@ -640,8 +640,12 @@ def add_ancillary_data(
             path_on_swath
         )
         return None
-    except Exception:
-        pass
+    except (KeyError, ValueError):
+        # No ancillary_data group exists yet, proceed with processing
+        LOGGER.debug("No existing ancillary data found in %s, proceeding with processing", path_on_swath)
+    except Exception as e:
+        LOGGER.warning("Error checking for existing ancillary data in %s: %s", path_on_swath, e)
+        # Continue processing despite check failure
 
     with xr.load_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_os = data_on_swath.longitude
@@ -655,9 +659,9 @@ def add_ancillary_data(
 
     # Store ancillary data in gridded geometry
     with xr.load_dataset(path_gridded, group="reference_data") as data_gridded:
-        lons_g = data_gridded.longitude.compute()
-        lats_g = data_gridded.latitude.compute()
-        time_g = data_gridded.time.compute()
+        # Batch compute operations for better memory efficiency
+        coords = data_gridded[['longitude', 'latitude', 'time']].compute()
+        lons_g, lats_g, time_g = coords.longitude, coords.latitude, coords.time
     data_gridded.close()
 
     start_time = scan_time.data.min()

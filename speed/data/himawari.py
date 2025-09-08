@@ -52,8 +52,12 @@ def add_himawari_obs(
             path_on_swath
         )
         return None
-    except Exception:
-        pass
+    except (KeyError, ValueError):
+        # No geo group exists yet, proceed with processing
+        LOGGER.debug("No existing geo data found in %s, proceeding with processing", path_on_swath)
+    except Exception as e:
+        LOGGER.warning("Error checking for existing geo data in %s: %s", path_on_swath, e)
+        # Continue processing despite check failure
 
     time_str = path_on_swath.name.split("_")[2][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
