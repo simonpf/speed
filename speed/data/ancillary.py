@@ -169,9 +169,7 @@ def load_era5_ancillary_data(
                 lat_max += 0.5
                 lon_mask = (lon_min <= lons) * (lons <= lon_max)
                 lat_mask = (lat_min <= lats) * (lats <= lat_max)
-                print(lon_min, lon_max)
                 inpt = inpt[{"longitude": lon_mask, "latitude": lat_mask}]
-                print(inpt)
             data.append(inpt[list(new_names.keys())].rename(**new_names))
 
     data = xr.concat(data, "time")
@@ -183,6 +181,8 @@ def load_era5_ancillary_data(
                 lon_min, lat_min, lon_max, lat_max = roi
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
+                if lon_min > lon_max:
+                    lon_min, lon_max = lon_max, lon_min
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
                 lon_min -= 0.5

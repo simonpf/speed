@@ -30,7 +30,7 @@ def get_domain() -> LonLatRect:
     lats = station_data.latitude.data
     lon_min, lon_max = lons.min(), lons.max()
     lat_min, lat_max = lats.min(), lats.max()
-    return LonLatRect(lon_min, lat_min, lon_max, lat_max)
+    return LonLatRect(lon_min, lat_min - 5.0, lon_max, lat_max + 5.0)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class WegenerNet(ReferenceData):
                 continue
         wegener_data = xr.concat(wegener_data, dim="station")
         invalid = 0.0 < wegener_data.flagged_percentage
-        wegener_net.surface_precip.data[invalid] = np.nan
+        wegener_data.surface_precip.data[invalid] = np.nan
 
         lons_g = GLOBAL.lons.copy()
         lats_g = GLOBAL.lats.copy()
@@ -105,6 +105,8 @@ class WegenerNet(ReferenceData):
         end_time = np.nanmax(scan_time)
         time = start_time + 0.5 * (end_time - start_time)
 
+        time_shifted = wegener_data.time.data - np.timedelta64(15, "m")
+        wegener_data = wegener_data.assign_coords(time=time_shifted)
         wegener_data = wegener_data.interp(time=time, method="nearest")
 
         surface_precip = binned_statistic_2d(
