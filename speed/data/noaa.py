@@ -13,29 +13,23 @@ from typing import List, Tuple
 
 from filelock import FileLock
 import pansat
-from pansat import FileRecord, TimeRange, Granule
+from pansat import TimeRange, Granule
 from pansat.environment import get_index
 from pansat.products.satellite.noaa.gaasp import (
     l1b_gcomw1_amsr2
 )
-from pansat.granule import merge_granules, Granule
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
-from pyresample.geometry import SwathDefinition
-from pyresample import kd_tree
-import toml
 
 import numpy as np
 import xarray as xr
 
 from speed.data.utils import (
-    extract_scans,
     save_data_on_swath,
     save_data_gridded,
     calculate_grid_resample_indices,
     calculate_swath_resample_indices,
     resample_data,
-    extract_rect,
     get_useful_scan_range,
 )
 from speed.data.reference import ReferenceData
@@ -337,13 +331,13 @@ class NOAAGAASPInput(InputData):
         time_range = TimeRange(start_time, end_time)
 
         for product in self.products:
-            LOGGER.info(f"Starting processing of product '%s'.", product.name)
+            LOGGER.info("Starting processing of product '%s'.", product.name)
 
             # Get all available files for given day.
             inpt_recs = product.get(time_range)
             inpt_index = Index.index(product, inpt_recs)
             LOGGER.info(
-                f"Found %s files for %s-%s-%s.",
+                "Found %s files for %s-%s-%s.",
                 len(inpt_recs), year, f"{month:02}", f"{day:02}"
             )
 
@@ -353,18 +347,17 @@ class NOAAGAASPInput(InputData):
                 inpt_index = inpt_index.subset(roi=reference_data.domain)
 
             # Collect available reference data.
-            reference_recs = []
             lock = FileLock("noaa_ref.lock")
             with lock:
-                reference_recs = reference_data.pansat_product.get(time_range)
+                reference_data.pansat_product.get(time_range)
             reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
             # Calculate matches between input and reference data.
             matches = find_matches(inpt_index, reference_index)
 
             LOGGER.info(
-                f"Found %s matches for input data product '%s' and "
-                f"reference data product '%s'.",
+                "Found %s matches for input data product '%s' and "
+                "reference data product '%s'.",
                 len(matches),
                 product.name,
                 reference_data.pansat_product.name,

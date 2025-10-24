@@ -1,5 +1,6 @@
 """
-speed.logging
+speed.logging.
+
 ==============
 
 Configures the logging for the speed package.
@@ -18,7 +19,5 @@ LOGGER = logging.getLogger("ipwgml")
 logging.basicConfig(level=_LOG_LEVEL, force=True, handlers=[_HANDLER])
 
 def get_console():
-    """
-    Return the console to use for live logging.
-    """
+    """Return the console to use for live logging."""
     return _CONSOLE

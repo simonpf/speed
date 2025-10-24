@@ -1,37 +1,29 @@
 """
-speed.data.gpm
+speed.data.gpm.
+
 ==============
 
 This module contains the code to process GPM L1C data into SPEED collocations.
 """
 from datetime import datetime, timedelta
 import logging
-import multiprocessing
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 from filelock import FileLock
 from gprof_nn.data.l1c import L1CFile
 from gprof_nn.data import preprocessor
 import pansat
-from pansat import FileRecord, TimeRange, Granule
+from pansat import TimeRange, Granule
 from pansat.environment import get_index
 from pansat.products.satellite.gpm import (
-    merged_ir,
-    l1c_metopa_mhs,
-    l1c_metopb_mhs,
-    l1c_metopc_mhs,
-    l1c_noaa18_mhs,
     l1c_noaa19_mhs,
     l1c_noaa20_atms,
     l1c_gcomw1_amsr2,
-    l1c_tropics03_tms,
-    l1c_tropics06_tms,
     l1c_r_gpm_gmi
 )
-from pansat.granule import merge_granules, Granule
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
 from pyresample.geometry import SwathDefinition
@@ -48,7 +40,6 @@ from speed.data.utils import (
     calculate_grid_resample_indices,
     calculate_swath_resample_indices,
     resample_data,
-    extract_rect,
     get_useful_scan_range,
 )
 from speed.data.reference import ReferenceData
@@ -122,7 +113,11 @@ def load_l1c_brightness_temperatures(
         lats = l1c_data.latitude.data
         lons = l1c_data.longitude.data
         if lats.shape == lats_p.shape:
-            return l1c_data.tbs
+            tbs = l1c_data.tbs.data
+            eia = l1c_data.incidence_angle.data
+            if eia.ndim < tbs.ndim:
+                eia = np.broadcast_to(eia[..., None], tbs.shape)
+            return tbs, eia
 
         source = SwathDefinition(lons=lons, lats=lats)
         target = SwathDefinition(lons=lons_p, lats=lats_p)
@@ -438,7 +433,14 @@ class GPMInput(InputData):
         time_range = TimeRange(start_time, end_time)
 
         for product in self.products:
-            LOGGER.info(f"Starting processing of product '%s'.", product.name)
+            LOGGER.info("Starting processing of product '%s'.", product.name)
+
+            ref_recs = reference_data.pansat_product.get(time_range)
+            if len(ref_recs) == 0:
+                LOGGER.info(
+                    "No reference data found for %s.", time_range
+                )
+                break
 
             # Get all available files of GPM product for given day.
             lock = FileLock("gpm_inpt.lock")
@@ -446,7 +448,7 @@ class GPMInput(InputData):
                 gpm_recs = product.get(time_range)
             gpm_index = Index.index(product, gpm_recs)
             LOGGER.info(
-                f"Found %s files for %s/%s/%s.",
+                "Found %s files for %s/%s/%s.",
                 len(gpm_recs), year, month, day
             )
 
@@ -460,15 +462,18 @@ class GPMInput(InputData):
             #lock = FileLock("gpm_ref.lock")
             #with lock:
             #    reference_recs = reference_data.pansat_product.get(time_range)
-            reference_recs = reference_data.pansat_product.get(time_range)
+            LOGGER.info("Downloading reference data.")
+            reference_data.pansat_product.get(time_range)
+            LOGGER.info("Indexing reference data.")
             reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
             # Calculate matches between input and reference data.
+            LOGGER.info("Searching matches.")
             matches = find_matches(gpm_index, reference_index)
 
             LOGGER.info(
-                f"Found %s matches for input data product '%s' and "
-                f"reference data product '%s'.",
+                "Found %s matches for input data product '%s' and "
+                "reference data product '%s'.",
                 len(matches),
                 product.name,
                 reference_data.pansat_product.name,
@@ -487,13 +492,13 @@ class GPMInput(InputData):
 
 
 MHS_PRODUCTS = [
-    l1c_metopa_mhs,
-    l1c_metopb_mhs,
-    l1c_metopc_mhs,
-    l1c_noaa18_mhs,
+    #l1c_metopa_mhs,
+    #l1c_metopb_mhs,
+    #l1c_metopc_mhs,
+    #l1c_noaa18_mhs,
     l1c_noaa19_mhs,
 ]
-mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3)
+mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3, beam_width=None)
 
 gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=None, radius_of_influence=15e3)
 
@@ -501,4 +506,7 @@ AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
 amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)
 
 ATMS_PRODUCTS = [l1c_noaa20_atms]
-atms = GPMInput("atms", ATMS_PRODUCTS, radius_of_influence=64e3)
+atms = GPMInput("atms", ATMS_PRODUCTS, beam_width=None, radius_of_influence=64e3)
+
+#SSMIS_PRODUCTS = [l1c_f16_ssmis]
+#ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)

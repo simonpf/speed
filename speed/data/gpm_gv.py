@@ -6,29 +6,20 @@ This module provides function to extract collocations with GPM ground-validation
 """
 import logging
 from typing import List, Optional, Union, Tuple
-import warnings
 
-import dask.array as da
 import numpy as np
 from pansat.products import Product
-from pansat import FileRecord, TimeRange, Granule
+from pansat import Granule
 from pansat.products.ground_based import gpm_gv
-from pyresample.geometry import AreaDefinition, SwathDefinition
-from pansat.catalog import Index
-from scipy.signal import convolve
+from pyresample.geometry import SwathDefinition
 import xarray as xr
 
 from speed.data.reference import ReferenceData
-from speed.grids import GLOBAL
 from speed.data.utils import (
-    get_smoothing_kernel,
-    extract_rect,
-    calculate_footprint_averages,
     interp_along_swath,
     resample_data
 )
 from .mrms import (
-    smooth_field,
     downsample_mrms_data,
     footprint_average_mrms_data
 )
@@ -55,7 +46,6 @@ def load_gv_data(
     input_files = []
     precip_rate_rec = granule.file_record
     precip_rate_rec = precip_rate_rec.get()
-    time_range = precip_rate_rec.temporal_coverage
 
     precip_rate_prod, rqi_prod, precip_type_prod, gcf_prod = gv_products
 
@@ -167,7 +157,6 @@ class GPMGV(ReferenceData):
         coords = input_granule.geometry.bounding_box_corners
         lon_min, lat_min, lon_max, lat_max = coords
 
-        ref_data = []
 
         col_start = None
         col_end = None

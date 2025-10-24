@@ -12,7 +12,6 @@ from typing import List, Optional
 from tempfile import TemporaryDirectory
 
 from filelock import FileLock
-from gprof_nn.data.l1c import L1CFile
 import numpy as np
 from pansat import Granule
 from pansat.catalog import Index

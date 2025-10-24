@@ -9,7 +9,6 @@ from typing import Optional
 
 
 import cartopy.crs as ccrs
-import cmocean
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.colors import LogNorm, Normalize
@@ -141,7 +140,7 @@ def plot_collocations_on_swath(
     add_ticks(ax, x_ticks, y_ticks, left=False, bottom=draw_x_ticks)
 
     if add_titles:
-        ax.set_title(f"Geo IR")
+        ax.set_title("Geo IR")
 
     ax = axs[3]
     m_sp = ax.pcolormesh(lons, lats, surface_precip, norm=precip_norm, cmap=precip_cmap)
@@ -151,7 +150,7 @@ def plot_collocations_on_swath(
     add_ticks(ax, x_ticks, y_ticks, left=False, bottom=draw_x_ticks)
 
     if add_titles:
-        ax.set_title(f"Surface precipitation")
+        ax.set_title("Surface precipitation")
     #
     # Add colorbars
     #
@@ -243,7 +242,7 @@ def plot_collocations_gridded(
     ext = (ext[0], ext[2], ext[1], ext[3])
 
     if len(axs) < 5:
-        axs = np.concatenate([[none], axs, [none]], 0)
+        axs = np.concatenate([[None], axs, [None]], 0)
 
     tbs_mw = data_inpt.tbs_mw.data
     tbs_ir = data_inpt.tbs_ir.data

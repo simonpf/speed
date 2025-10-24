@@ -7,9 +7,7 @@ This module defines the representation of reference data products.
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from pansat import FileRecord, TimeRange
 from pansat.granule import Granule
-from pansat.products.ground_based import mrms
 
 
 ALL_DATASETS = {}

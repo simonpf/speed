@@ -5,6 +5,7 @@ speed.data.ancillary
 Functionality to extract ancillary data for SPEED collocations.
 """
 from calendar import monthrange
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
@@ -133,15 +134,22 @@ def load_era5_ancillary_data(
          the leaf-area index.
     """
     new_names = {
-        "tcwv": "total_column_water_vapor",
-        "t2m": "two_meter_temperature",
         "u10": "ten_meter_wind_u",
         "v10": "ten_meter_wind_v",
+        "d2m": "two_meter_dew_point",
+        "t2m": "two_meter_temperature",
+        "cape": "cape",
+        "siconc": "sea_ice_concentration",
         "sst": "sea_surface_temperature",
         "skt": "skin_temperature",
-        "siconc": "sea_ice_concentration",
         "sd": "snow_depth",
-        "cape": "cape"
+        "sf": "snowfall",
+        "sp": "surface_pressure",
+        "tciw": "total_column_cloud_ice_water",
+        "tclw": "total_column_cloud_liquid_water",
+        "tcwv": "total_column_water_vapor",
+        "tp": "total_precipitation",
+        "cp": "convective_precipitation",
     }
 
     data = []
@@ -151,6 +159,8 @@ def load_era5_ancillary_data(
                 lon_min, lat_min, lon_max, lat_max = roi
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
+                if lon_min > lon_max:
+                    lon_min, lon_max = lon_max, lon_min
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
                 lon_min -= 0.5
@@ -171,6 +181,8 @@ def load_era5_ancillary_data(
                 lon_min, lat_min, lon_max, lat_max = roi
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
+                if lon_min > lon_max:
+                    lon_min, lon_max = lon_max, lon_min
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
                 lon_min -= 0.5
@@ -288,7 +300,6 @@ def load_emissivity_data(ancillary_dir: Path, date: np.datetime64) -> xr.DataArr
     month = to_datetime(date).month
     emiss_file = ancillary_dir / f"emiss_class_{month:02}.dat"
 
-    emiss = []
     n_lons = 720
     n_lats = 359
 
@@ -326,7 +337,6 @@ def load_emissivity_data_all_months(ancillary_dir: Path) -> xr.DataArray:
     Return:
          An xr.DataArray containing the data loaded from the file.
     """
-    emiss = []
     n_lons = 720
     n_lats = 359
 
@@ -618,9 +628,24 @@ def add_ancillary_data(
         gprof_ancillary_dir: Path pointing to the GPROF ancillary dir.
         gprof_ingest_dir: Path pointing to the GPROF ingest dir.
     """
-    sensor = path_on_swath.name.split("_")[1]
-    time_str = path_on_swath.name.split("_")[2][:-3]
+    sensor = path_on_swath.name.split("_")[-2]
+    time_str = path_on_swath.name.split("_")[-1][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
+
+    try:
+        data = xr.open_dataset(path_on_swath, group="ancillary_data")
+        data.close()
+        LOGGER.info(
+            "Skipping input files %s because they already contain ancillary_data observations.",
+            path_on_swath
+        )
+        return None
+    except (KeyError, ValueError):
+        # No ancillary_data group exists yet, proceed with processing
+        LOGGER.debug("No existing ancillary data found in %s, proceeding with processing", path_on_swath)
+    except Exception as e:
+        LOGGER.warning("Error checking for existing ancillary data in %s: %s", path_on_swath, e)
+        # Continue processing despite check failure
 
     with xr.load_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_os = data_on_swath.longitude
@@ -634,14 +659,13 @@ def add_ancillary_data(
 
     # Store ancillary data in gridded geometry
     with xr.load_dataset(path_gridded, group="reference_data") as data_gridded:
-        lons_g = data_gridded.longitude.compute()
-        lats_g = data_gridded.latitude.compute()
-        time_g = data_gridded.time.compute()
+        # Batch compute operations for better memory efficiency
+        coords = data_gridded[['longitude', 'latitude', 'time']].compute()
+        lons_g, lats_g, time_g = coords.longitude, coords.latitude, coords.time
     data_gridded.close()
 
     start_time = scan_time.data.min()
     end_time = scan_time.data.max()
-    print(start_time)
     era5_sfc_files = find_era5_sfc_files(era5_path, start_time, end_time)
     era5_lai_files = find_era5_lai_files(era5_lai_path, start_time, end_time)
     era5_data = load_era5_ancillary_data(
@@ -680,7 +704,6 @@ def add_ancillary_data(
         for var in ancillary_data.variables if var != "surface_type"
     }
     encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
-    print(ancillary_data)
     ancillary_data.to_netcdf(
         path_on_swath,
         group="ancillary_data",
@@ -708,7 +731,6 @@ def add_ancillary_data(
         var: {"dtype": "float32", "compression": "zstd"}
         for var in ancillary_data.variables if var != "surface_type"
     }
-    print(ancillary_data)
     encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
     ancillary_data.to_netcdf(
         path_gridded,
@@ -751,13 +773,13 @@ def cli(
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:
-        time_str = f_on_swath.name.split("_")[2][:-3]
+        time_str = f_on_swath.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
-        time_str = f_gridded.name.split("_")[2][:-3]
+        time_str = f_gridded.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
@@ -793,16 +815,18 @@ def cli(
         tasks = []
         for median_time in combined:
             tasks.append(
-                add_ancillary_data,
-                times_on_swath[median_time],
-                times_gridded[median_time],
-                era5_path=era5_path,
-                era5_lai_path=era5_lai_path,
-                gprof_ancillary_dir=gprof_ancillary_dir,
-                gprof_ingest_dir=gprof_ingest_dir
+                pool.submit(
+                    add_ancillary_data,
+                    times_on_swath[median_time],
+                    times_gridded[median_time],
+                    era5_path=era5_path,
+                    era5_lai_path=era5_lai_path,
+                    gprof_ancillary_dir=gprof_ancillary_dir,
+                    gprof_ingest_dir=gprof_ingest_dir
+                )
             )
         with Progress(console=speed.logging.get_console()) as progress:
-            extraction = progress.add_task("Extracting GOES observations:", total=len(tasks))
+            extraction = progress.add_task("Extracting ancillary data:", total=len(tasks))
             for task in as_completed(tasks):
                 try:
                     task.result()

@@ -1,97 +1,44 @@
-"""
-speed.data.goes
-===============
 
-This module contains functionality to add GOES 16 observations to collocations.
+"""
+speed.data.seviri
+=================
+
+This module contains functionality to add MSG SEVIRI observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 import gc
 import logging
 from pathlib import Path
-from typing import Dict, List
+from tempfile import TemporaryDirectory
 
 import click
 import numpy as np
-from pansat import TimeRange, FileRecord
+from pansat import TimeRange
 from pansat.time import to_datetime64
-from pansat.products.satellite.goes import (
-    GOES16L1BRadiances
+from pansat.utils import resample_data
+from pansat.products.satellite.meteosat import (
+    l1b_rs_msg_seviri
 )
 from pyresample.geometry import SwathDefinition
 from rich.progress import track, Progress
-from satpy import Scene
 import xarray as xr
 
-from speed.data.utils import round_time
+from speed.data.utils import round_time, get_median_time
 import speed.logging
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-
-def find_goes_files(
-        products,
-        start_time: np.datetime64,
-        end_time: np.datetime64,
-        time_step: np.timedelta64,
-) -> Dict[np.datetime64, List[FileRecord]]:
-    """
-    Find input data files within a given file range from which to extract
-    training data.
-
-    Args:
-        start_time: Start time of the time range.
-        end_time: End time of the time range.
-        time_step: The time step of the retrieval.
-        roi: An optional geometry object describing the region of interest
-        that can be used to restriced the file selection a priori.
-        path: If provided, files should be restricted to those available from
-        the given path.
-
-    Return:
-        A list of list of files to extract the GOES retrieval input data from.
-    """
-    found_files = {}
-
-    time_range = TimeRange(start_time, end_time).expand(np.timedelta64(8 * 60, "s"))
-
-    for prod in products:
-        recs = prod.find_files(time_range)
-
-        matched_recs = {}
-        matched_deltas = {}
-
-        for rec in recs:
-            tr_rec = rec.temporal_coverage
-            time_c = to_datetime64(tr_rec.start + 0.5 * (tr_rec.end - tr_rec.start))
-            time_n = round_time(time_c, time_step)
-            delta = abs(time_c - time_n)
-
-            min_delta = matched_deltas.get(time_n)
-            if min_delta is None:
-                matched_recs[time_n] = rec
-                matched_deltas[time_n] = delta
-            else:
-                if delta < min_delta:
-                    matched_recs[time_n] = rec
-                    matched_deltas[time_n] = delta
-
-        for time_n, matched_rec in matched_recs.items():
-            found_files.setdefault(time_n, []).append(matched_rec)
-
-    return found_files
-
-
-def add_goes_obs(
+def add_seviri_obs(
         path_on_swath: Path,
         path_gridded: Path,
         n_steps: int = 4,
         sector: str = "conus"
 ) -> None:
     """
-    Add GOES observations for extracted collocations.
+    Add SEVIRI observations for extracted collocations.
 
     Args:
         path_on_swath: Path to the file containing the collocations extracted in on_swath format.
@@ -122,20 +69,17 @@ def add_goes_obs(
         path_on_swath
     )
 
-    time_str = path_on_swath.name.split("_")[2][:-3]
-    median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
-    rounded = round_time(median_time, time_step)
+    median_time = get_median_time(path_on_swath)
+    time_str = median_time.strftime("%Y%m%d%H%M%S")
+    rounded = to_datetime64(round_time(median_time, time_step))
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * time_step
     time_steps = rounded + offsets
 
-    if sector.lower() == "conus":
-        products = [GOES16L1BRadiances("C", channel) for channel in range(1, 17)]
-    else:
-        products = [GOES16L1BRadiances("F", channel) for channel in range(1, 17)]
-
-
-    goes_recs = find_goes_files(products, time_steps.min(), time_steps.max(), time_step)
-    assert all([step in goes_recs for step in time_steps])
+    seviri_recs = []
+    for time_step in time_steps:
+        time_range = TimeRange(time_step - np.datetime64(150, "s"), time_step + np.datetime64(149, "s"))
+        seviri_rec = l1b_rs_msg_seviri.get(time_range)
+        seviri_recs.append(seviri_rec[0])
 
     with xr.open_dataset(path_gridded, group="input_data") as data_gridded:
         lons_g = data_gridded.longitude.data
@@ -152,80 +96,84 @@ def add_goes_obs(
 
     lons, lats = np.meshgrid(lons_g, lats_g)
     grid = SwathDefinition(xr.DataArray(lons), xr.DataArray(lats))
-    SwathDefinition(lons=xr.DataArray(lons_n), lats=xr.DataArray(lats_n))
+    swath = SwathDefinition(lons=xr.DataArray(lons_n), lats=xr.DataArray(lats_n))
 
-    goes_data_g = []
-    goes_data_n = []
+    seviri_data_g = []
+    seviri_data_s = []
     times = []
 
-    for time in time_steps:
-        try:
-            logging.disable(logging.CRITICAL)
-            recs = [rec.get() for rec in goes_recs[time]]
+    for time, seviri_rec in zip(time_steps, seviri_recs):
 
-            files = [str(rec.local_path) for rec in recs]
-            scene = Scene(files, reader="abi_l1b")
-            datasets = [f"C{ind:02}" for ind in range(1, 17)]
-            scene.load(datasets, generate=False)
+        with TemporaryDirectory():
+            seviri_data = l1b_rs_msg_seviri.open(seviri_rec)
 
-            data_g = scene.resample(grid).to_xarray_dataset()
-            obs_g = np.stack([data_g[f"C{ind:02}"].data for ind in range(1, 17)], -1)
+            hrv = data.HRV.coarsen({"latitude_0": 2 ,"longitude_0": 2}).mean()
+            seviri_data = seviri_data.drop_vars("hrv")
+            seviri_data["HRV"] = (("y_1", "x_1"), hrv.data)
+            seviri_data = seviri_data.rename({
+                "latitude_1": "latitude",
+                "longitude_1": "longitude",
+            })
+
+            seviri_channels = [
+                "HRV", "VIS006", "VIS008", "IR_016", "IR_039", "WV_062", "WV_073", "IR_087",
+                "IR_097", "IR_108", "IR_120", "IR_134"
+            ]
+
+            data_g = resample_data(seviri_data, grid)
+            obs_g = np.stack([data_g[chan].data for chan in seviri_channels])
+            seviri_data_g.append(obs_g)
             del data_g
 
-            data_n = scene.resample(grid).to_xarray_dataset()
-            obs_n = np.stack([data_n[f"C{ind:02}"].data for ind in range(1, 17)], -1)
-            del data_n
+            data_s = resample_data(seviri_data, swath)
+            obs_s = np.stack([data_s[chan].data for chan in seviri_channels])
+            seviri_data_s.append(obs_s)
+            del data_s
 
-            goes_data_g.append(obs_g)
-            goes_data_n.append(obs_n)
-            times.append(to_datetime64(recs[0].central_time.start))
+            times.append(time)
 
-        finally:
-            logging.disable(logging.NOTSET)
-
-        # Save data in gridded format.
 
     times = np.array(times)
     LOGGER.info(
-        "Saving GOES data for collocation %s.",
+        "Saving SEVIRI data for collocation %s.",
         time_str
     )
 
-    goes_data_g = xr.Dataset(
+    seviri_data_g = xr.Dataset(
         {
             "latitude": (("latitude"), lats_g.astype(np.float32)),
             "longitude": (("longitude"), lons_g.astype(np.float32)),
             "time": (("time",), times),
             "observations": (
                 ("latitude", "longitude", "time", "channel"),
-                np.stack(goes_data_g, 2).astype(np.float32)
+                np.stack(seviri_data_g, 2).astype(np.float32)
             ),
         }
     )
-    goes_data_g.observations.encoding = {"dtype": "float32", "zlib": True}
+    seviri_data_g.observations.encoding = {"dtype": "float32", "zlib": True}
     encoding = {
-        var: {"zlib": True} for var in goes_data_g
+        var: {"zlib": True} for var in seviri_data_g
     }
-    goes_data_g.to_netcdf(path_gridded, group="geo", mode="a", encoding=encoding)
+    seviri_data_g.to_netcdf(path_gridded, group="geo", mode="a", encoding=encoding)
 
-    goes_data_n = xr.Dataset(
+    seviri_data_s = xr.Dataset(
         {
             "observations": (
                 ("scan", "pixel", "time", "channel"),
-                np.stack(goes_data_n, 2).astype(np.float32)
+                np.stack(seviri_data_s, 2).astype(np.float32)
             ),
             "time": (("time",), times),
         }
     )
-    goes_data_n.observations.encoding = {"dtype": "float32", "zlib": True}
+    seviri_data_s.observations.encoding = {"dtype": "float32", "zlib": True}
     encoding = {
-        var: {"zlib": True} for var in goes_data_n
+        var: {"zlib": True} for var in seviri_data_s
     }
-    goes_data_n.to_netcdf(path_on_swath, group="geo", mode="a", encoding=encoding)
+    seviri_data_s.to_netcdf(path_on_swath, group="geo", mode="a", encoding=encoding)
 
     del times
-    del goes_data_g
-    del goes_data_n
+    del seviri_data_g
+    del seviri_data_s
     gc.collect()
 
 
@@ -242,11 +190,11 @@ def cli(
         pattern: str = "*.nc"
 ):
     """
-    Extract GOES observations matching GPM collocations.
+    Extract SEVIRI observations matching GPM collocations.
 
     speed extract_goes collocation_path --n_steps N
 
-    Extracts GOES-16 observations for all collocations found in 'collocation_path' in both gridded
+    Extracts SEVIRI observations for all collocations found in 'collocation_path' in both gridded
     and on_swath projections. 'N' defines the number of 10-minute time steps centered on the
     median overpass time are extracted.
     """
@@ -278,11 +226,11 @@ def cli(
     if n_processes < 2:
         for median_time in track(
                 combined,
-                description="Extracting GOES observations:",
+                description="Extracting SEVIRI observations:",
                 console=speed.logging.get_console()
         ):
             try:
-                add_goes_obs(
+                add_seviri_obs(
                     times_on_swath[median_time],
                     times_gridded[median_time],
                     n_steps=n_steps
@@ -300,13 +248,13 @@ def cli(
         tasks = []
         for median_time in combined:
             tasks.append(pool.submit(
-                add_goes_obs,
+                add_seviri_obs,
                 times_on_swath[median_time],
                 times_gridded[median_time],
                 n_steps=n_steps
             ))
         with Progress(console=speed.logging.get_console()) as progress:
-            extraction = progress.add_task("Extracting GOES observations:", total=len(tasks))
+            extraction = progress.add_task("Extracting SEVIRI observations:", total=len(tasks))
             for task in as_completed(tasks):
                 try:
                     task.result()

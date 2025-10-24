@@ -5,7 +5,7 @@ speed.data.cpcir
 This module contains functionality to add CPCIR (MERGEDIR) observations to collocations.
 """
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from pyresample.geometry import SwathDefinition
 from rich.progress import Progress
 import xarray as xr
 
-from speed.data.utils import resample_data, round_time
+from speed.data.utils import round_time
 
 
 LOGGER = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def add_cpcir_obs(
         path_gridded: Path to the file containing the collocations extract in gridded format.
         n_steps: The number 30 minute time steps to extract.
     """
-    time_str = path_on_swath.name.split("_")[2][:-3]
+    time_str = path_on_swath.name.split("_")[-1][:-3]
     median_time = to_datetime64(datetime.strptime(time_str, "%Y%m%d%H%M%S"))
     rounded = round_time(median_time, np.timedelta64(30, "m"))
     offsets = (np.arange(-n_steps // 2, n_steps // 2) + 1) * np.timedelta64("30", "m")
@@ -57,7 +57,7 @@ def add_cpcir_obs(
         lon_min_s, lon_max_s = lons_s.min(), lons_s.max()
         lat_min_s, lat_max_s = lats_s.min(), lats_s.max()
 
-    swath = SwathDefinition(lons=lons_s, lats=lats_s)
+    SwathDefinition(lons=lons_s, lats=lats_s)
 
     cpcir_data_g = []
     cpcir_data_s = []
@@ -138,13 +138,13 @@ def cli(
 
     times_on_swath = {}
     for f_on_swath in files_on_swath:
-        time_str = f_on_swath.name.split("_")[2][:-3]
+        time_str = f_on_swath.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_on_swath[median_time] = f_on_swath
 
     times_gridded = {}
     for f_gridded in files_gridded:
-        time_str = f_gridded.name.split("_")[2][:-3]
+        time_str = f_gridded.name.split("_")[-1][:-3]
         median_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
         times_gridded[median_time] = f_gridded
 
@@ -171,7 +171,7 @@ def cli(
                     task.result()
                 except KeyboardInterrupt as exc:
                     raise exc
-                except Exception as exc:
+                except Exception:
                     LOGGER.exception(
                         "Encountered an error when processing collocation with median overpass time %s.",
                         median_time

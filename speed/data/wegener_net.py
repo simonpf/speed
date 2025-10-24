@@ -6,7 +6,7 @@ This module provides functionality to extract collocations with the WegenerNet
 ground-station data.
 """
 import logging
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional
 
 import numpy as np
 from pansat.products.stations.wegener_net import station_data, get_station_data
@@ -30,7 +30,7 @@ def get_domain() -> LonLatRect:
     lats = station_data.latitude.data
     lon_min, lon_max = lons.min(), lons.max()
     lat_min, lat_max = lats.min(), lats.max()
-    return LonLatRect(lon_min, lat_min, lon_max, lat_max)
+    return LonLatRect(lon_min, lat_min - 5.0, lon_max, lat_max + 5.0)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -71,8 +71,18 @@ class WegenerNet(ReferenceData):
         coords = input_granule.geometry.bounding_box_corners
         lon_min, lat_min, lon_max, lat_max = coords
 
-        wegener_data = [granule.open() for granule in granules]
+        wegener_data = []
+        for granule in granules:
+            try:
+                station_data = granule.open()
+                if "latitude" in station_data.dims:
+                    continue
+                wegener_data.append(station_data)
+            except ValueError:
+                continue
         wegener_data = xr.concat(wegener_data, dim="station")
+        invalid = 0.0 < wegener_data.flagged_percentage
+        wegener_data.surface_precip.data[invalid] = np.nan
 
         lons_g = GLOBAL.lons.copy()
         lats_g = GLOBAL.lats.copy()
@@ -95,12 +105,14 @@ class WegenerNet(ReferenceData):
         end_time = np.nanmax(scan_time)
         time = start_time + 0.5 * (end_time - start_time)
 
+        time_shifted = wegener_data.time.data - np.timedelta64(15, "m")
+        wegener_data = wegener_data.assign_coords(time=time_shifted)
         wegener_data = wegener_data.interp(time=time, method="nearest")
 
         surface_precip = binned_statistic_2d(
             wegener_data.latitude.data,
             wegener_data.longitude.data,
-            wegener_data.surface_precip.data,
+            2.0 * wegener_data.surface_precip.data, # This is half-hourly data.
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
 
@@ -125,6 +137,9 @@ class WegenerNet(ReferenceData):
         sensor_latitude = input_data.spacecraft_latitude
         sensor_longitude = input_data.spacecraft_longitude
         sensor_altitude = input_data.spacecraft_altitude
+
+        if beam_width is None:
+            return results, None
 
         results_fpavg = calculate_footprint_averages(
             wegener_data,

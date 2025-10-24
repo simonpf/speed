@@ -1,17 +1,20 @@
 """
-speed.data.utils
+speed.data.utils.
+
 ================
 
 Utility functions for data processing.
 """
 from copy import copy
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from gprof_nn.data.l1c import L1CFile
-from pansat.time import to_datetime
+from pansat.time import to_datetime, to_datetime64, to_timedelta64
+from tqdm import tqdm
 
 import numpy as np
 from pansat import Granule
@@ -32,7 +35,7 @@ def get_smoothing_kernel(fwhm: float, grid_resolution: float) -> np.ndarray:
         fwhm: The full width at half maximum of the kernel.
         grid_resolution: The resolution of the underlying grid.
 
-    Return:
+    Returns:
         A numpy.ndarray containing the convolution kernel.
     """
     fwhm_n = fwhm / grid_resolution
@@ -294,9 +297,9 @@ def save_data_gridded(
 
     output_file = gridded_path / fname
 
-    encoding = {var: {"compression": "zstd"} for var in preprocessor_data}
+    encoding = {var: {"zlib": True, "complevel": 5} for var in preprocessor_data}
     preprocessor_data.to_netcdf(output_file, group="input_data", encoding=encoding)
-    encoding = {var: {"compression": "zstd"} for var in reference_data}
+    encoding = {var: {"zlib": True, "complevel": 5} for var in reference_data}
     reference_data.to_netcdf(output_file, group="reference_data", mode="a", encoding=encoding)
 
 
@@ -421,7 +424,6 @@ def calculate_grid_resample_indices(dataset, target_grid):
     ind_in, ind_out, inds, _ = info
 
     dims = ("scan", "pixel")
-    resampled = {}
 
     row_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", swath.shape, row_inds, ind_in, ind_out, inds, fill_value=-1
@@ -470,7 +472,6 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
     ind_in, ind_out, inds, _ = info
 
     dims = ("latitude", "longitude")
-    resampled = {}
 
     scan_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", target.shape, scan_inds, ind_in, ind_out, inds, fill_value=-1
@@ -493,27 +494,28 @@ def calculate_swath_resample_indices(dataset, target_grid, radius_of_influence):
 
 
 ANCILLARY_VARIABLES = [
-    "wet_bulb_temperature",
+    "ten_meter_wind_u",
+    "ten_meter_wind_v",
+    "two_meter_dew_point",
     "two_meter_temperature",
-    "lapse_rate",
-    "total_column_water_vapor",
-    "surface_temperature",
-    "moisture_convergence",
-    "leaf_area_index",
+    "cape",
+    "sea_ice_concentration",
+    "sea_surface_temperature",
+    "skin_temperature",
     "snow_depth",
-    "orographic_wind",
-    "10m_wind",
+    "snowfall",
+    "surface_pressure",
+    "total_column_cloud_ice_water",
+    "total_column_cloud_liquid_water",
+    "total_column_water_vapor",
+    "total_precipitation",
+    "convective_precipitation",
     "surface_type",
-    "mountain_type",
-    "land_fraction",
-    "ice_fraction",
-    "quality_flag",
-    "sunglint_angle",
-    "airlifting_index"
+    "elevation"
 ]
 
 def save_ancillary_data(
-        input_data: xr.Dataset,
+        anc_data: xr.Dataset,
         time: datetime,
         path: Path
 ) -> None:
@@ -521,7 +523,7 @@ def save_ancillary_data(
     Save ancillary data in separate folder.
 
     Args:
-        input_data: A xarray.Dataset containing all retrieval input data
+        anc_data: A xarray.Dataset containing all retrieval input data
             for a single training scene.
         time: The median time of the scene.
         path: The base folder in which to store the extracted training
@@ -530,15 +532,16 @@ def save_ancillary_data(
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"ancillary_{date_str}.nc"
 
-    output_path = path / "ancillary"
+    output_path = path / "ancillary" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     anc_vars = ANCILLARY_VARIABLES
-    if "latitude" not in input_data.dims:
+    if "latitude" not in anc_data.dims:
         anc_vars = copy(anc_vars) + ["latitude", "longitude"]
 
-    ancillary_data = input_data[anc_vars]
-    ancillary_data.to_netcdf(output_path / filename)
+    encoding = {var: {"dtype": "float32", "zlib": True} for var in anc_data.variables}
+    ancillary_data = anc_data[anc_vars]
+    ancillary_data.to_netcdf(output_path / filename, encoding=encoding)
 
 
 def save_input_data(
@@ -560,14 +563,19 @@ def save_input_data(
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"{sensor}_{date_str}.nc"
 
-    output_path = path / f"{sensor}"
+    output_path = path / f"{sensor}" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     uint16_max = 2 ** 16 - 1
-    int16_min = 2 ** 15
+
+    qflag = input_data.quality_flag
+    qflag.data[qflag.data < -128] = -99
+    input_data["quality_flag"] = (("scan", "pixel"), qflag.data.astype("int8"))
+
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
-        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "compression": "zstd"},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
+        "earth_incidence_angle": {"dtype": "int16", "_FillValue": -(2e-15), "scale_factor": 0.01, "zlib": True, "complevel": 5},
+        "quality_flag": {"dtype": "int8", "zlib": True, "complevel": 5},
     }
     vars = [
         var for var in ["observations", "earth_incidence_angle"]
@@ -621,7 +629,7 @@ def save_target_data(
     date_str = time.strftime("%Y%m%d%H%M%S")
     filename = f"target_{date_str}.nc"
 
-    output_path = path / "target"
+    output_path = path / "target" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
     target_variables = [
@@ -635,21 +643,20 @@ def save_target_data(
 
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
-        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "compression": "zstd"},
-        "precipitation_type": {"dtype": "int8", "compression": "zstd"},
-        "total_water_content": {"dtype": "float32", "compression": "zstd"},
-        "rain_water_content": {"dtype": "float32", "compression": "zstd"},
-        "total_water_content": {"dtype": "float32", "compression": "zstd"},
-        "rain_water_path": {"dtype": "float32", "compression": "zstd"},
-        "snow_water_path": {"dtype": "float32", "compression": "zstd"},
-        "latent_heating": {"dtype": "float32", "compression": "zstd"}
+        "surface_precip": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
+        "radar_quality_index": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "valid_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "precip_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "snow_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "hail_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "convective_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "stratiform_fraction": {"dtype": "uint8", "_FillValue": 255, "scale_factor": 1.0/254.0, "zlib": True, "complevel": 5},
+        "precipitation_type": {"dtype": "int8", "zlib": True, "complevel": 5},
+        "total_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "rain_water_content": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "rain_water_path": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "snow_water_path": {"dtype": "float32", "zlib": True, "complevel": 5},
+        "latent_heating": {"dtype": "float32", "zlib": True, "complevel": 5}
     }
 
     target_data = reference_data[target_variables]
@@ -676,9 +683,9 @@ def save_geo_data(
     filename = f"geo_{date_str}.nc"
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
-    output_path = path / "geo"
+    output_path = path / "geo" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
     geo_data.to_netcdf(output_path / filename, encoding=encoding)
 
@@ -702,9 +709,9 @@ def save_geo_ir_data(
     filename = f"geo_ir_{date_str}.nc"
     uint16_max = 2 ** 16 - 1
     encoding = {
-        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "compression": "zstd"},
+        "observations": {"dtype": "uint16", "_FillValue": uint16_max, "scale_factor": 0.01, "zlib": True, "complevel": 5},
     }
-    output_path = path / "geo_ir"
+    output_path = path / "geo_ir" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
     geo_ir_data = geo_ir_data.rename(tbs_ir="observations")
     geo_ir_data.to_netcdf(output_path / filename, encoding=encoding)
@@ -741,6 +748,8 @@ def extract_scenes(
     sensor_name = collocation_file.name.split("_")[1]
     input_data = xr.load_dataset(collocation_file, group="input_data")
     reference_data = xr.load_dataset(collocation_file, group="reference_data")
+    ancillary_data = xr.load_dataset(collocation_file, group="ancillary_data")
+
     if include_geo:
         geo_data = xr.load_dataset(collocation_file, group="geo")
         if "scans" in geo_data.dims:
@@ -789,6 +798,7 @@ def extract_scenes(
         slices = [slice(row_start, row_end), slice(col_start, col_end)]
 
         inpt = input_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
+        anc = ancillary_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
         ref = reference_data[{name: slc for name, slc in zip(spatial_dims, slices)}]
 
         valid_input_frac = valid_input[slices[0], slices[1]].mean()
@@ -805,11 +815,15 @@ def extract_scenes(
         if "lower_lef_col" in inpt.attrs:
             inpt.attrs["lower_left_col"] += col_start
             inpt.attrs["lower_left_row"] += row_start
+            anc.attrs["lower_left_col"] = inpt.attrs["lower_left_col"]
+            anc.attrs["lower_left_row"] = inpt.attrs["lower_left_row"]
             ref.attrs["lower_left_col"] += col_start
             ref.attrs["lower_left_row"] += row_start
         if "scan_start" in inpt.attrs:
             inpt.attrs["scan_start"] += row_start
             inpt.attrs["scan_end"] = inpt.attrs["scan_start"] + row_end
+            anc.attrs["scan_start"] = inpt.attrs["scan_start"]
+            anc.attrs["scan_end"] = inpt.attrs["scan_end"]
             inpt.attrs["pixel_start"] = col_start
             inpt.attrs["pixel_end"] = col_end
 
@@ -818,7 +832,7 @@ def extract_scenes(
         time = scan_times[0] + np.median(scan_times - scan_times[0])
         time = to_datetime(time)
 
-        #save_ancillary_data(inpt, time, output_folder)
+        save_ancillary_data(anc, time, output_folder)
         save_input_data(sensor_name, inpt, time, output_folder)
         save_target_data(ref, time, output_folder)
         if geo_data is not None:
@@ -862,9 +876,9 @@ def extract_evaluation_data(
 
     Args:
         collocation_file_gridded: A path pointing to a file containing a SPEED collocation
-            in on_swath sampling.
-        collocation_file_gridded: A path pointing to a file containing a SPEED collocation
             in regridded format.
+        collocation_file_on_swath: A path pointing to a file containing a SPEED collocation
+            in on_swath sampling.
         output_folder: The folder to which to write the extracted scenes.
         include_geo: If 'True', will extract GEO observations for all evaluation scenes.
         include_geo_ir: If 'True', will extract GEO IR observations for all evaluation scenes.
@@ -874,7 +888,6 @@ def extract_evaluation_data(
     sensor_name = parts[-2]
     time_str = parts[-1][:-3]
     time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
-
 
     with xr.load_dataset(collocation_file_gridded, group="input_data") as input_data:
         n_lats = input_data.sizes["latitude"]
@@ -898,25 +911,20 @@ def extract_evaluation_data(
     input_data = xr.load_dataset(collocation_file_on_swath, group="input_data")
     input_data.attrs["gpm_input_file"] = input_data.attrs.pop("gpm_input_file")
     reference_data = xr.load_dataset(collocation_file_on_swath, group="reference_data")
-    save_ancillary_data(input_data, time, output_folder / "on_swath")
+    ancillary_data = xr.load_dataset(collocation_file_on_swath, group="ancillary_data")
+
+    save_ancillary_data(ancillary_data, time, output_folder / "on_swath")
     save_input_data(sensor_name, input_data, time, output_folder / "on_swath")
     save_target_data(reference_data, time, output_folder / "on_swath")
-
-    #surface_precip_fpavg = reference_data.surface_precip_fpavg
-    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
-    pixel_inds = reference_data.pixel_index
-    scan_inds = reference_data.scan_index
-    #surface_precip_fpavg = surface_precip_fpavg[{"scans": scan_inds, "pixels": pixel_inds}]
-    #invalid = scan_inds.data < 0
-    #surface_precip_fpavg.data[invalid] = np.nan
-    #reference_data["surface_precip_fpavg"] = surface_precip_fpavg
 
     gpm_input_file = input_data.attrs["gpm_input_file"]
 
     # Extract gridded data.
     input_data = xr.load_dataset(collocation_file_gridded, group="input_data")
+    reference_data = xr.load_dataset(collocation_file_gridded, group="reference_data")
+    ancillary_data = xr.load_dataset(collocation_file_gridded, group="ancillary_data")
     input_data.attrs["gpm_input_file"] = gpm_input_file
-    save_ancillary_data(input_data, time, output_folder / "gridded")
+    save_ancillary_data(ancillary_data, time, output_folder / "gridded")
     save_input_data(sensor_name, input_data, time, output_folder / "gridded")
     save_target_data(
         reference_data,
@@ -1253,7 +1261,8 @@ def calculate_footprint_averages(
 def interp_along_swath(
         ref_data: xr.Dataset,
         scan_time: xr.DataArray,
-        dimension: str = "time"
+        dimension: str = "time",
+        ref_dims: Tuple[str] = (("latitude", "longitude"))
 ) -> xr.Dataset:
     """
     Interpolate time-gridded data to swath.
@@ -1287,7 +1296,7 @@ def interp_along_swath(
     inds = np.digitize(scan_time.astype(np.int64), time_bins.astype(np.int64))
     out_of_range = (inds == 0) + (inds==time_bins.size)
     inds[out_of_range] = time_bins.size // 2
-    inds = xr.DataArray(inds - 1, dims=(("latitude", "longitude")))
+    inds = xr.DataArray(inds - 1, dims=ref_dims)
 
     time = ref_data.time[{"time": inds}]
     ref_data_r = ref_data[{"time": inds}]
@@ -1297,3 +1306,89 @@ def interp_along_swath(
     ref_data_r["time"].data[invalid_time] = np.datetime64("NaT")
 
     return ref_data_r
+
+def copy_file(
+        file_path: Path,
+        input_path: Path,
+        output_path: Path,
+        groups: List[str] = None
+) -> None:
+    """
+    Copy a collocation file from one directory to another.
+
+    Args:
+        file_path: Path pointing to the file to copy.
+        input_path: The root of the input data directory, which is used to calculate
+            the path of the output file relative to the output path.
+        output_path: The root of the output directory.
+        groups: A list containing the names of the groups to copy.
+    """
+    if groups is None:
+        groups = ["input_data", "reference_data", "ancillary_data", "geo", "geo_ir"]
+
+    rel_path = file_path.relative_to(input_path)
+
+    group_1 = groups[0]
+    data = xr.load_dataset(file_path, group=group_1)
+    for var in data:
+        data[var].encoding["zlib"] = True
+    (output_path / rel_path).parent.mkdir(exist_ok=True, parents=True)
+    data.to_netcdf(output_path / rel_path, group=group_1)
+
+    for group in groups[1:]:
+        data = xr.load_dataset(file_path, group=group)
+        for var in data:
+            data[var].encoding["zlib"] = True
+        data.to_netcdf(output_path / rel_path, group=group, mode="a")
+
+
+def copy_collocation_files(
+        input_path: Path,
+        output_path: Path,
+        groups: List[str] = None,
+        n_workers: int = 8,
+        glob_pattern: str = "**/*.nc"
+):
+    """
+    Copy collocations from one directory to another ensuring that data is compressed.
+
+    Args:
+        input_path: The directory containing the collocations to copy.
+        output_path: The directory to which to copy the collocations.
+        groups: Which groups to copy.
+        n_workers: The number of workers to use to copy the data.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    colloc_files = sorted(list(input_path.glob(glob_pattern)))
+
+    pool = ProcessPoolExecutor(max_workers=n_workers)
+    tasks = {}
+    for path in colloc_files:
+        task = pool.submit(copy_file, path, input_path, output_path, groups=groups)
+        tasks[task] = path
+
+    for task in tqdm(as_completed(tasks), total=len(tasks)):
+        try:
+            task.result()
+        except Exception:
+            LOGGER.exception(
+                "Error processing: %s", tasks[task]
+            )
+
+
+def get_median_time(path: Union[Path, str]) -> datetime:
+    """
+    Extract median time from filename.
+
+    Args:
+        path: A Path object or string pointing to a collocation file.
+
+    Return:
+        A datetime object representing the collocations median time.
+    """
+    if isinstance(path, Path):
+        path = path.name
+    date = datetime.strptime(path.split("_")[-1][:-3], "%Y%m%d%H%M%S")
+    return date

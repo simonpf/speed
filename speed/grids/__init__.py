@@ -1,5 +1,6 @@
 """
-speed.grids
+speed.grids.
+
 ===========
 
 Define the global grid used by speed and provides helper functions
@@ -15,8 +16,9 @@ import pyresample
 @dataclass
 class Grid:
     """
-    Wrapper class combining relevant aspects of the grid used by
-    SPEED.
+    Wrapper class combining relevant aspects of the grid used by SPEED.
+
+    Provides convenient access to grid properties and coordinate arrays.
     """
 
     grid: pyresample.geometry.AreaDefinition
@@ -24,6 +26,12 @@ class Grid:
     lats: np.ndarray
 
     def __init__(self, area):
+        """
+        Initialize grid with area definition.
+        
+        Args:
+            area: Pyresample AreaDefinition object defining the grid.
+        """
         self.grid = area
         lons, lats = area.get_lonlats()
         self.lons = lons[0]
