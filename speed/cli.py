@@ -56,6 +56,8 @@ def extract_data(
     """Extract collocations for a given date."""
     from speed.data.input import get_input_dataset
     from speed.data.reference import get_reference_dataset
+    import speed.data.gpm
+    import speed.data.ocean_rain
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:

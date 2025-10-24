@@ -435,6 +435,13 @@ class GPMInput(InputData):
         for product in self.products:
             LOGGER.info("Starting processing of product '%s'.", product.name)
 
+            ref_recs = reference_data.pansat_product.get(time_range)
+            if len(ref_recs) == 0:
+                LOGGER.info(
+                    "No reference data found for %s.", time_range
+                )
+                break
+
             # Get all available files of GPM product for given day.
             lock = FileLock("gpm_inpt.lock")
             with lock:
