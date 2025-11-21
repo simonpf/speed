@@ -1,4 +1,4 @@
-"""gpmn
+"""
 speed.data.wegener_net
 ======================
 
@@ -21,7 +21,9 @@ from pansat.products.ground_based.ocean_rain import (
 
 from pansat.geometry import LonLatRect
 from pansat.granule import Granule
+from pansat.utils import resample_data
 from scipy.stats import binned_statistic_2d
+from pyresample.geometry import SwathDefinition
 
 from speed.data.reference import ReferenceData
 from speed.data.utils import calculate_footprint_averages
@@ -83,22 +85,43 @@ class OceanRain(ReferenceData):
         data = []
         for granule in granules:
             try:
+                idx_range = granule.primary_index_range
+                idx_range = (max(idx_range[0] - 120, 0), idx_range[1] + 120)
+                granule.primary_index_range = idx_range
                 granule_data = granule.open()
                 data.append(granule_data)
             except ValueError:
                 continue
-        data = xr.concat(data, dim="time").rolling(time=30)
+
+        data = xr.concat(data, dim="time").rename(
+         ODM470_precipitation_rate_R="surface_precip"
+        )
+        print(data.time, data.longitude, data.latitude, data.surface_precip)
+        data["surface_precip_30"] = data.surface_precip.rolling(time=30, center=True).mean()
+        data["surface_precip"] = data.surface_precip.rolling(time=60, center=True).mean()
+        data["surface_precip_90"] = data.surface_precip.rolling(time=90, center=True).mean()
+        data["surface_precip_120"] = data.surface_precip.rolling(time=120, center=True).mean()
+        data["rain_prob"] = data.probability_for_rain.rolling(time=60, center=True).mean()
+        data["snow_prob"] = data.probability_for_snow.rolling(time=60, center=True).mean()
+        data["mixed_phase_prob"] = data.probability_for_mixed_phase.rolling(time=60, center=True).mean()
+        data["surface_precip_gauge"] = data.rain_gauge_precipitation_rate.rolling(time=60, center=True).mean()
         invalid = 3 < data.precip_flag
         data.surface_precip.data[invalid] = np.nan
+
+        input_data = input_granule.open()
+        lons = input_data.longitude_s1
+        lats = input_data.latitude_s1
+        lon_min, lon_max = np.nanmin(lons), np.nanmax(lons)
+        lat_min, lat_max = np.nanmin(lats), np.nanmax(lats)
 
         lons_g = GLOBAL.lons.copy()
         lats_g = GLOBAL.lats.copy()
         lons_g = lons_g
         lats_g = lats_g
 
-        lon_inds = (lons_g > lon_min) * (lons_g < lon_max)
+        lon_inds = (lon_min < lons_g) * (lons_g < lon_max)
         lons_g = lons_g[lon_inds]
-        lat_inds = (lats_g > lat_min) * (lats_g < lat_max)
+        lat_inds = (lat_min < lats_g) * (lats_g < lat_max)
         lats_g = lats_g[lat_inds]
         lower_left_col = np.where(lon_inds)[0][0]
         lower_left_row = np.where(lat_inds)[0][0]
@@ -106,43 +129,63 @@ class OceanRain(ReferenceData):
         lon_bins = 0.5 * (lons_g[1:] + lons_g[:-1])
         lat_bins = 0.5 * (lats_g[1:] + lats_g[:-1])
 
-        input_data = input_granule.open()
         scan_time = input_data.scan_time.data
         start_time = np.nanmin(scan_time)
         end_time = np.nanmax(scan_time)
         time = start_time + 0.5 * (end_time - start_time)
 
-        data = data.interp(time=time, method="nearest")
+        data = data.interp(time=[time], method="nearest")
+        swath = SwathDefinition(lats=lats, lons=lons)
+        data_r = resample_data(data, swath, radius_of_influence=radius_of_influence)
+        valid = np.isfinite(data_r.surface_precip.data)
+        LOGGER.info("Found %s valid pixels after resampling.", valid.sum())
 
-        rain_fraciton = binned_statistic_2d(
-            data.latitude.data,
-            data.longitude.data,
-            data.precip_flag.data == 0,
+        rain_prob = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.rain_prob.data[valid],
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
-        snow_fraction = binned_statistic_2d(
-            data.latitude.data,
-            data.longitude.data,
-            data.precip_flag.data == 1,
+        snow_prob = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.snow_prob.data[valid],
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
-        mixed_phase_fraction = binned_statistic_2d(
-            data.latitude.data,
-            data.longitude.data,
-            data.precip_flag.data == 2,
+        mixed_phase_prob = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.mixed_phase_prob.data[valid],
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
-        precip_fraction = binned_statistic_2d(
-            data.latitude.data,
-            data.longitude.data,
-            data.precip_flag.data < 3,
+        surface_precip_30 = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.surface_precip_30.data[valid],
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
-
         surface_precip = binned_statistic_2d(
-            data.latitude.data,
-            data.longitude.data,
-            data.ODM470_precipitation_rate_R.data == 0.0,
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.surface_precip.data[valid],
+            bins=(lat_bins[::-1], lon_bins)
+        )[0][::-1]
+        surface_precip_90 = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.surface_precip_90.data[valid],
+            bins=(lat_bins[::-1], lon_bins)
+        )[0][::-1]
+        surface_precip_120 = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.surface_precip_120.data[valid],
+            bins=(lat_bins[::-1], lon_bins)
+        )[0][::-1]
+        surface_precip_gauge = binned_statistic_2d(
+            data_r.latitude.data[valid],
+            data_r.longitude.data[valid],
+            data_r.surface_precip_gauge.data[valid],
             bins=(lat_bins[::-1], lon_bins)
         )[0][::-1]
 
@@ -155,9 +198,13 @@ class OceanRain(ReferenceData):
             "longitude": (("longitude",), lons),
             "latitude": (("latitude",), lats),
             "surface_precip": (("latitude", "longitude"), surface_precip),
-            "precip_fraction": (("latitude", "longitude"), precip_fraction),
-            "rain_fraction": (("latitude", "longitude"), rain_fraction),
-            "snow_fraction": (("latitude", "longitude"), snow_fraction),
+            "surface_precip_30": (("latitude", "longitude"), surface_precip_30),
+            "surface_precip_90": (("latitude", "longitude"), surface_precip_90),
+            "surface_precip_120": (("latitude", "longitude"), surface_precip_120),
+            "surface_precip_gauge": (("latitude", "longitude"), surface_precip_gauge),
+            "probability_of_rain": (("latitude", "longitude"), rain_prob),
+            "probability_of_snow": (("latitude", "longitude"), snow_prob),
+            "probability_of_mixed_phase": (("latitude", "longitude"), mixed_phase_prob),
             "time": (("latitude", "longitude"), time)
         })
         # Account for shrinkage caused by grid-based resampling
@@ -199,7 +246,7 @@ ocean_rain_rv_maria_s_merian = OceanRain(
 )
 ocean_rain_rv_investigator = OceanRain(
     "ocean_rain_rv_investigator",
-    ocean_rain_rv_maria_s_merian
+    ocean_rain_rv_investigator
 )
 ocean_rain_rv_meteor = OceanRain(
     "ocean_rain_rv_meteor",
