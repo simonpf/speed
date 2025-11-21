@@ -13,6 +13,7 @@ import warnings
 import numpy as np
 from pansat import Granule
 from pansat.products.ground_based import mrms
+from pansat.geometry import LonLatRect
 from pyresample.geometry import AreaDefinition, SwathDefinition
 from scipy.signal import convolve
 import xarray as xr
@@ -621,3 +622,19 @@ class MRMS(ReferenceData):
 
 
 mrms_data = MRMS("mrms")
+
+
+class MRMSWest(MRMS):
+    """
+    Reference data class for processing MRMS data.
+
+    Combines MRMS precip rate, flag and radar quality index into
+    a DataArray.
+    """
+
+    def __init__(self, name):
+        domain = LonLatRect(-125, 20, -115, 45)
+        ReferenceData.__init__(self, domain, mrms.precip_rate)
+
+
+mrms_west_data = MRMSWest("mrms_west")

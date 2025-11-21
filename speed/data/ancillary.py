@@ -62,6 +62,8 @@ def find_era5_sfc_files(
     time = datetime(start_time.year, start_time.month, day=1)
     while time <= end_time:
         mpath = era5_path / f"{time.year}{time.month:02}"
+        if not mpath.exists():
+            mpath = era5_path
         era5_files += sorted(list(mpath.glob("ERA5*surf.nc")))
         _, days = monthrange(time.year, time.month)
         time += timedelta(days=days)
@@ -103,6 +105,8 @@ def find_era5_lai_files(
     time = datetime(start_time.year, start_time.month, day=1)
     while time <= end_time:
         mpath = era5_lai_path / f"{time.year}{time.month:02}"
+        if not mpath.exists():
+            mpath = era5_lai_path
         lai_paths += sorted(list(mpath.glob("ERA5*lai.nc")))
         _, days = monthrange(time.year, time.month)
         time += timedelta(days=days)
@@ -151,9 +155,11 @@ def load_era5_ancillary_data(
         "tp": "total_precipitation",
         "cp": "convective_precipitation",
     }
+    era5_variables = list(new_names.keys())
 
     data = []
     for era5_file in era5_sfc_files:
+        print(era5_file)
         with xr.open_dataset(era5_file) as inpt:
             if roi is not None:
                 lon_min, lat_min, lon_max, lat_max = roi
@@ -163,14 +169,18 @@ def load_era5_ancillary_data(
                     lon_min, lon_max = lon_max, lon_min
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
-                lon_min -= 0.5
-                lat_min -= 0.5
-                lon_max += 0.5
-                lat_max += 0.5
+                lon_min -= 1.0
+                lat_min -= 1.0
+                lon_max += 1.0
+                lat_max += 1.0
                 lon_mask = (lon_min <= lons) * (lons <= lon_max)
                 lat_mask = (lat_min <= lats) * (lats <= lat_max)
-                inpt = inpt[{"longitude": lon_mask, "latitude": lat_mask}]
-            data.append(inpt[list(new_names.keys())].rename(**new_names))
+                lon_start, lon_end = np.where(lon_mask)[0][[0, -1]]
+                lon_slice = slice(lon_start, lon_end)
+                lat_start, lat_end = np.where(lat_mask)[0][[0, -1]]
+                lat_slice = slice(lat_start, lat_end)
+                inpt = inpt[era5_variables][{"longitude": lon_slice, "latitude": lat_slice}].compute()
+            data.append(inpt.rename(**new_names))
 
     data = xr.concat(data, "time")
 
@@ -182,7 +192,12 @@ def load_era5_ancillary_data(
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
                 if lon_min > lon_max:
+<<<<<<< HEAD
                     lon_min, lon_max = lon_max, lon_min
+=======
+                    lon_min = 0.0
+                    lon_max = 360.0
+>>>>>>> f6d8212 (Fix extraction of ancillary data.)
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
                 lon_min -= 0.5
@@ -192,6 +207,8 @@ def load_era5_ancillary_data(
                 lon_mask = (lon_min <= lons) * (lons <= lon_max)
                 lat_mask = (lat_min <= lats) * (lats <= lat_max)
                 inpt = inpt[{"longitude": lon_mask, "latitude": lat_mask}]
+
+            inpt = inpt.transpose("time", "latitude", "longitude")
             lai_data.append(inpt[["lai_hv", "lai_lv"]])
 
     lai_data = xr.concat(lai_data, dim="time")
@@ -606,6 +623,8 @@ def load_elevation_data(roi: Tuple[float, float]) -> xr.Dataset:
     return xr.concat(combined, dim="latitude")
 
 
+
+
 def add_ancillary_data(
         path_on_swath: Path,
         path_gridded: Path,
@@ -649,13 +668,25 @@ def add_ancillary_data(
 
     with xr.load_dataset(path_on_swath, group="input_data") as data_on_swath:
         lons_os = data_on_swath.longitude
-        lon_min, lon_max = lons_os.data.min(), lons_os.data.max()
+        lon_min_os, lon_max_os = lons_os.data.min(), lons_os.data.max()
         lats_os = data_on_swath.latitude
-        lat_min, lat_max = lats_os.data.min(), lats_os.data.max()
-
-        roi = (lon_min, lat_min, lon_max, lat_max)
+        lat_min_os, lat_max_os = lats_os.data.min(), lats_os.data.max()
         scan_time = data_on_swath.scan_time
     data_on_swath.close()
+
+    with xr.load_dataset(path_gridded, group="input_data") as data_gridded:
+        lons_g = data_gridded.longitude
+        lon_min_g, lon_max_g = lons_g.data.min(), lons_g.data.max()
+        lats_g = data_gridded.latitude
+        lat_min_g, lat_max_g = lats_g.data.min(), lats_g.data.max()
+        data_gridded.close()
+
+    roi = (
+        min(lon_min_os, lon_min_g),
+        min(lat_min_os, lat_min_g),
+        max(lon_max_os, lon_max_g),
+        max(lat_max_os, lat_max_g)
+    )
 
     # Store ancillary data in gridded geometry
     with xr.load_dataset(path_gridded, group="reference_data") as data_gridded:
@@ -668,9 +699,12 @@ def add_ancillary_data(
     end_time = scan_time.data.max()
     era5_sfc_files = find_era5_sfc_files(era5_path, start_time, end_time)
     era5_lai_files = find_era5_lai_files(era5_lai_path, start_time, end_time)
+
+    LOGGER.info("Loading ERA5 data.")
     era5_data = load_era5_ancillary_data(
         era5_sfc_files, era5_lai_files, roi=roi
     )
+    LOGGER.info("Loading surface type data.")
     surface_type = load_gprof_surface_type_data(
         ancillary_dir=gprof_ancillary_dir,
         ingest_dir=gprof_ingest_dir,
@@ -679,6 +713,7 @@ def add_ancillary_data(
         resolution=32,
         roi=roi
     )
+    LOGGER.info("Loading elevation.")
     elevation = load_elevation_data(roi=roi)
 
     # Store ancillary data in on-swath geometry
