@@ -638,3 +638,19 @@ class MRMSWest(MRMS):
 
 
 mrms_west_data = MRMSWest("mrms_west")
+
+
+class MRMSEast(MRMS):
+    """
+    Reference data class for processing MRMS data.
+
+    Combines MRMS precip rate, flag and radar quality index into
+    a DataArray.
+    """
+
+    def __init__(self, name):
+        domain = LonLatRect(-85, 25, -67, 45)
+        ReferenceData.__init__(self, domain, mrms.precip_rate)
+
+
+mrms_east_data = MRMSWest("mrms_east")
