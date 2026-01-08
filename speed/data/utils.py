@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
+import shutil
 from typing import List, Optional, Tuple, Union
 
 from gprof_nn.data.l1c import L1CFile
@@ -535,7 +536,7 @@ def save_ancillary_data(
     output_path = path / "ancillary" / time.strftime("%Y/%m/%d")
     output_path.mkdir(exist_ok=True, parents=True)
 
-    anc_vars = ANCILLARY_VARIABLES
+    anc_vars = [var for var in ANCILLARY_VARIABLES if var in anc_data]
     if "latitude" not in anc_data.dims:
         anc_vars = copy(anc_vars) + ["latitude", "longitude"]
 
@@ -663,6 +664,69 @@ def save_target_data(
     encoding = {var: encoding[var] for var in target_variables if var in encoding}
     target_data.to_netcdf(output_path / filename, encoding=encoding)
 
+from tqdm import tqdm
+
+
+def split_geo_file(geo_file: Path):
+    """
+    Split geo observation file.
+
+    Args:
+        geo_file: A Path object pointing to the file to split.
+    """
+    if "_t" in geo_file.name:
+        return
+
+    path = geo_file.parent
+    target_file = path / "_".join(
+        ["target"] + geo_file.name.split("_")[-1:]
+    )
+    with xr.open_dataset(target_file) as target_data:
+        time = target_data.time.compute()
+
+
+    geo_data_t = xr.load_dataset(geo_file)
+
+    if "time" not in geo_data_t.dims:
+        return
+
+    if "scans" in geo_data_t.dims:
+        geo_data_t = geo_data_t.rename(
+            scans="scan",
+            pixels="pixel"
+        )
+
+    if "latitude" in geo_data_t.dims:
+        dims = ("latitude", "longitude")
+    else:
+        dims = ("scan", "pixel")
+
+    if "channel" in geo_data_t.dims:
+        dims = ("time", "channel",) + dims
+    else:
+        dims = ("time",) + dims
+
+    geo_data_t = geo_data_t.transpose(*dims)
+
+    diff = np.abs(geo_data_t.time - time)
+    inds = diff.argmin("time")
+
+    if "latitude" in geo_data_t.dims:
+        inds = inds.assign_coords(
+            latitude=geo_data_t.latitude.data,
+            longitude=geo_data_t.longitude.data
+        )
+    print(geo_data_t, inds, target_data)
+    geo_data = geo_data_t[{"time": inds}]
+
+    fname = geo_file.name
+    parts = fname.split("_")
+    parts.insert(-1, "t")
+    fname_t = "_".join(parts)
+
+    geo_data_t.to_netcdf(path / fname_t)
+    geo_data.to_netcdf(path / fname)
+
 
 def save_geo_data(
         geo_data: xr.Dataset,
@@ -715,6 +779,7 @@ def save_geo_ir_data(
     output_path.mkdir(exist_ok=True, parents=True)
     geo_ir_data = geo_ir_data.rename(tbs_ir="observations")
     geo_ir_data.to_netcdf(output_path / filename, encoding=encoding)
+
 
 
 def extract_scenes(
@@ -1392,3 +1457,77 @@ def get_median_time(path: Union[Path, str]) -> datetime:
         path = path.name
     date = datetime.strptime(path.split("_")[-1][:-3], "%Y%m%d%H%M%S")
     return date
+
+
+
+
+def organize_files(
+        input_directory: Path,
+        target_directory: Path,
+        base_sensor: str,
+        domain: str
+):
+    for geometry in ["on_swath", "gridded"]:
+
+        files = sorted(list((Path(input_directory) / geometry).glob("**/*.nc")))
+        print(f"found {len(files)} files.")
+
+        ancillary_files = {
+            get_median_time(path): path for path in files if path.name.startswith("ancillary")
+        }
+        obs_files = {
+            get_median_time(path): path for path in files if path.name.startswith(f"{base_sensor}")
+        }
+        geo_files = {
+            get_median_time(path): path for path in files if path.name.startswith(f"geo_") and not path.name.startswith("geo_ir_")
+        }
+        geo_ir_files = {
+            get_median_time(path): path for path in files if path.name.startswith(f"geo_ir")
+        }
+        target_files = {
+            get_median_time(path): path for path in files if path.name.startswith("target")
+        }
+        len(target_files)
+
+        split = "testing"
+        files = {
+           f"{base_sensor}": list(obs_files.values()),
+           "geo": list(geo_files.values()),
+           "geo_ir": list(geo_ir_files.values()),
+            "ancillary": list(ancillary_files.values()),
+            "target": list(target_files.values())
+        }
+
+        times = np.array([get_median_time(path) for path in next(iter(files.values()))])
+        subsets = np.logspace(-2, 0, 5)
+        indices = np.random.permutation(times.size)
+        time_splits = []
+        start = 0
+        for frac in subsets:
+            n_samples = max(1, int(frac * times.size))
+            subset_indices = indices[start:start + n_samples]
+            time_splits.append(subset_indices)
+            start += n_samples
+
+        assert set(range(times.size)) == set.union(*[set(time_split) for time_split in time_splits])
+
+        geo_files = []
+        geo_ir_files = []
+
+        for source, source_files in files.items():
+            source_files = np.array(source_files)
+            for path in source_files:
+                time = get_median_time(path)
+                year = time.year
+                month = time.month
+                day = time.day
+                output_path = target_directory / base_sensor / split / domain / geometry / f"{year:04}" / f"{month:02}" / f"{day:02}"
+                output_path.mkdir(exist_ok=True, parents=True)
+                shutil.copyfile(path, output_path / path.name)
+                if source == "geo":
+                    geo_files.append(output_path / path.name)
+                if source == "geo_ir":
+                    geo_ir_files.append(output_path / path.name)
+
+        for path in geo_files + geo_ir_files:
+            split_geo_file(path)
