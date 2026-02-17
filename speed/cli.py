@@ -1,6 +1,5 @@
 """
 speed.cli.
-
 =========
 
 The command line interface of SPEED.
@@ -19,7 +18,7 @@ import xarray as xr
 
 import click
 
-from speed.data import cpcir, goes, ancillary, himawari
+from speed.data import cpcir, goes, ancillary, himawari, gpm, combined
 
 LOGGER = logging.getLogger(__file__)
 
@@ -58,14 +57,16 @@ def extract_data(
     from speed.data.reference import get_reference_dataset
     import speed.data.gpm
     import speed.data.ocean_rain
+    import speed.data.mrms
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:
         LOGGER.error(f"The input dataset '{input_data}' is not known.")
         return 1
     reference_dataset = get_reference_dataset(reference_data)
+    print(reference_dataset, reference_data)
     if reference_dataset is None:
-        LOGGER.error(f"The input dataset '{reference_data}' is not known.")
+        LOGGER.error(f"The reference dataset '{reference_data}' is not known.")
         return 1
     output_folder = Path(output_folder)
 
@@ -142,7 +143,7 @@ def extract_training_data_spatial(
 ) -> int:
     """
     Extract spatial training scenes from collocations in COLLOCATION_PATH and write scenes to OUTPUT_FOLDER.
-    
+
     Extracts spatial scenes from collocation files for training machine learning models.
     """
     from speed.data.utils import extract_scenes
@@ -219,7 +220,7 @@ def extract_training_data_tabular(
 ) -> int:
     """
     Extract tabular training data from collocations in COLLOCATION_PATH and write resulting files to OUTPUT_FOLDER.
-    
+
     Extracts flattened tabular data from collocation files for training tabular models.
     """
     from speed.data.utils import extract_training_data

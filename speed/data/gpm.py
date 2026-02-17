@@ -21,6 +21,7 @@ from pansat.environment import get_index
 from pansat.products.satellite.gpm import (
     l1c_noaa19_mhs,
     l1c_noaa20_atms,
+    l1c_f17_ssmis,
     l1c_gcomw1_amsr2,
     l1c_r_gpm_gmi
 )
@@ -433,15 +434,15 @@ class GPMInput(InputData):
         time_range = TimeRange(start_time, end_time)
 
         for product in self.products:
-            LOGGER.info("Starting processing of product '%s'.", product.name)
 
-            ref_recs = reference_data.pansat_product.get(time_range)
+            ref_recs = reference_data.pansat_product.find_files(time_range)
             if len(ref_recs) == 0:
                 LOGGER.info(
                     "No reference data found for %s.", time_range
                 )
                 break
 
+            LOGGER.info("Getting input data for product %s.", product.name)
             # Get all available files of GPM product for given day.
             lock = FileLock("gpm_inpt.lock")
             with lock:
@@ -459,16 +460,19 @@ class GPMInput(InputData):
                 LOGGER.info("Found %s granules over ROI.", len(gpm_index.data))
 
             # Collect available reference data.
-            #lock = FileLock("gpm_ref.lock")
-            #with lock:
-            #    reference_recs = reference_data.pansat_product.get(time_range)
-            LOGGER.info("Downloading reference data.")
-            reference_data.pansat_product.get(time_range)
+            lock = FileLock("gpm_ref.lock")
+            reference_recs = []
+            with lock:
+                for granule in gpm_index.granules:
+                    reference_recs += reference_data.pansat_product.get(granule.time_range)
             LOGGER.info("Indexing reference data.")
-            reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
+            reference_index = Index.index(reference_data.pansat_product, reference_recs)
+            #reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
 
             # Calculate matches between input and reference data.
             LOGGER.info("Searching matches.")
+            print(gpm_index)
+            print(reference_index)
             matches = find_matches(gpm_index, reference_index)
 
             LOGGER.info(
@@ -503,10 +507,10 @@ mhs = GPMInput("mhs", MHS_PRODUCTS, radius_of_influence=64e3, beam_width=None)
 gmi = GPMInput("gmi", [l1c_r_gpm_gmi], beam_width=None, radius_of_influence=15e3)
 
 AMSR2_PRODUCTS = [l1c_gcomw1_amsr2]
-amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3)
+amsr2 = GPMInput("amsr2", AMSR2_PRODUCTS, radius_of_influence=6e3, beam_width=None)
 
 ATMS_PRODUCTS = [l1c_noaa20_atms]
 atms = GPMInput("atms", ATMS_PRODUCTS, beam_width=None, radius_of_influence=64e3)
 
-#SSMIS_PRODUCTS = [l1c_f16_ssmis]
-#ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+SSMIS_PRODUCTS = [l1c_f17_ssmis]
+ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)

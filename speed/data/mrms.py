@@ -632,12 +632,12 @@ class MRMSWest(MRMS):
     a DataArray.
     """
 
-    def __init__(self, name):
+    def __init__(self):
         domain = LonLatRect(-125, 20, -115, 45)
-        ReferenceData.__init__(self, domain, mrms.precip_rate)
+        ReferenceData.__init__(self, "mrms_west", domain, mrms.precip_rate)
 
 
-mrms_west_data = MRMSWest("mrms_west")
+mrms_west_data = MRMSWest()
 
 
 class MRMSEast(MRMS):
@@ -648,9 +648,9 @@ class MRMSEast(MRMS):
     a DataArray.
     """
 
-    def __init__(self, name):
+    def __init__(self):
         domain = LonLatRect(-85, 25, -67, 45)
-        ReferenceData.__init__(self, domain, mrms.precip_rate)
+        ReferenceData.__init__(self, "mrms_east", domain, mrms.precip_rate)
 
 
-mrms_east_data = MRMSWest("mrms_east")
+mrms_east_data = MRMSEast()
