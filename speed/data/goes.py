@@ -152,7 +152,7 @@ def add_goes_obs(
 
     lons, lats = np.meshgrid(lons_g, lats_g)
     grid = SwathDefinition(xr.DataArray(lons), xr.DataArray(lats))
-    SwathDefinition(lons=xr.DataArray(lons_n), lats=xr.DataArray(lats_n))
+    swath = SwathDefinition(lons=xr.DataArray(lons_n), lats=xr.DataArray(lats_n))
 
     goes_data_g = []
     goes_data_n = []
@@ -172,7 +172,7 @@ def add_goes_obs(
             obs_g = np.stack([data_g[f"C{ind:02}"].data for ind in range(1, 17)], -1)
             del data_g
 
-            data_n = scene.resample(grid).to_xarray_dataset()
+            data_n = scene.resample(swath).to_xarray_dataset()
             obs_n = np.stack([data_n[f"C{ind:02}"].data for ind in range(1, 17)], -1)
             del data_n
 
@@ -235,11 +235,13 @@ def add_goes_obs(
 @click.option("--n_steps", type=int, default=8)
 @click.option("--n_processes", type=int, default=1)
 @click.option("--pattern", type=str, default="*.nc")
+@click.option("--sector", type=str, default="conus")
 def cli(
         collocation_path: str,
         n_steps: int = 8,
         n_processes: int = 1,
-        pattern: str = "*.nc"
+        pattern: str = "*.nc",
+        sector: str = "conus"
 ):
     """
     Extract GOES observations matching GPM collocations.
@@ -285,7 +287,8 @@ def cli(
                 add_goes_obs(
                     times_on_swath[median_time],
                     times_gridded[median_time],
-                    n_steps=n_steps
+                    n_steps=n_steps,
+                    sector=sector
                 )
             except Exception:
                 LOGGER.exception(
@@ -303,7 +306,8 @@ def cli(
                 add_goes_obs,
                 times_on_swath[median_time],
                 times_gridded[median_time],
-                n_steps=n_steps
+                n_steps=n_steps,
+                sector=sector
             ))
         with Progress(console=speed.logging.get_console()) as progress:
             extraction = progress.add_task("Extracting GOES observations:", total=len(tasks))

@@ -45,9 +45,6 @@ LOGGER = logging.getLogger(__name__)
 class OceanRain(ReferenceData):
     """
     Reference data class for extracting OceanRAIN data.
-
-    Extracts matching
-    a DataArray.
     """
 
     def __init__(
@@ -96,127 +93,88 @@ class OceanRain(ReferenceData):
         data = xr.concat(data, dim="time").rename(
          ODM470_precipitation_rate_R="surface_precip"
         )
-        print(data.time, data.longitude, data.latitude, data.surface_precip)
-        data["surface_precip_30"] = data.surface_precip.rolling(time=30, center=True).mean()
-        data["surface_precip"] = data.surface_precip.rolling(time=60, center=True).mean()
-        data["surface_precip_90"] = data.surface_precip.rolling(time=90, center=True).mean()
-        data["surface_precip_120"] = data.surface_precip.rolling(time=120, center=True).mean()
-        data["rain_prob"] = data.probability_for_rain.rolling(time=60, center=True).mean()
-        data["snow_prob"] = data.probability_for_snow.rolling(time=60, center=True).mean()
-        data["mixed_phase_prob"] = data.probability_for_mixed_phase.rolling(time=60, center=True).mean()
-        data["surface_precip_gauge"] = data.rain_gauge_precipitation_rate.rolling(time=60, center=True).mean()
-        invalid = 3 < data.precip_flag
-        data.surface_precip.data[invalid] = np.nan
+        lons = data.longitude.data
+        lats = data.latitude.data
+        lon_min = np.nanmin(lons) - 0.1
+        lon_max = np.nanmax(lons) + 0.1
+        lat_min = np.nanmin(lats) - 0.1
+        lat_max = np.nanmax(lats) + 0.1
+        if 180 < lon_max - lon_min:
+            lon_min = 0.0
+            lon_max = 0.0
+        swath = SwathDefinition(lons=lons, lats=lats)
 
-        input_data = input_granule.open()
-        lons = input_data.longitude_s1
-        lats = input_data.latitude_s1
-        lon_min, lon_max = np.nanmin(lons), np.nanmax(lons)
-        lat_min, lat_max = np.nanmin(lats), np.nanmax(lats)
-
+        # Get global grid
         lons_g = GLOBAL.lons.copy()
         lats_g = GLOBAL.lats.copy()
         lons_g = lons_g
         lats_g = lats_g
-
         lon_inds = (lon_min < lons_g) * (lons_g < lon_max)
         lons_g = lons_g[lon_inds]
         lat_inds = (lat_min < lats_g) * (lats_g < lat_max)
         lats_g = lats_g[lat_inds]
         lower_left_col = np.where(lon_inds)[0][0]
         lower_left_row = np.where(lat_inds)[0][0]
-
         lon_bins = 0.5 * (lons_g[1:] + lons_g[:-1])
         lat_bins = 0.5 * (lats_g[1:] + lats_g[:-1])
 
-        scan_time = input_data.scan_time.data
-        start_time = np.nanmin(scan_time)
-        end_time = np.nanmax(scan_time)
-        time = start_time + 0.5 * (end_time - start_time)
+        input_data = input_granule.open().reset_coords()
+        input_time, _ = xr.broadcast(input_data.scan_time, input_data.longitude_s1)
+        input_data["scan_time"] = input_time
+        input_data["latitude"] = (("scans", "pixels",), input_data["latitude_s1"].data)
+        input_data["longitude"] = (("scans", "pixels"), input_data["longitude_s1"].data)
+        resample_vars = ["scan_time", "latitude", "longitude", "latitude_s1", "longitude_s1"]
+        input_data_r = resample_data(input_data[resample_vars], swath, radius_of_influence=7.5e3, new_dims=("time",))
 
-        data = data.interp(time=[time], method="nearest")
-        swath = SwathDefinition(lats=lats, lons=lons)
-        data_r = resample_data(data, swath, radius_of_influence=radius_of_influence)
-        valid = np.isfinite(data_r.surface_precip.data)
-        LOGGER.info("Found %s valid pixels after resampling.", valid.sum())
+        time_diff = np.abs(input_data_r.scan_time.data - data.time.data)
 
-        rain_prob = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.rain_prob.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        snow_prob = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.snow_prob.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        mixed_phase_prob = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.mixed_phase_prob.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        surface_precip_30 = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.surface_precip_30.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        surface_precip = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.surface_precip.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        surface_precip_90 = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.surface_precip_90.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        surface_precip_120 = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.surface_precip_120.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
-        surface_precip_gauge = binned_statistic_2d(
-            data_r.latitude.data[valid],
-            data_r.longitude.data[valid],
-            data_r.surface_precip_gauge.data[valid],
-            bins=(lat_bins[::-1], lon_bins)
-        )[0][::-1]
+        results = []
 
-        lons = lons_g[1:-1]
-        lats = lats_g[1:-1]
+        for delta in [15, 30, 60]:
+            valid = (time_diff < np.timedelta64(delta, "m")) * (np.isfinite(data.surface_precip.data))
+            weights = binned_statistic_2d(
+                input_data_r.latitude_s1.data[valid],
+                input_data_r.longitude_s1.data[valid],
+                data.surface_precip.data[valid],
+                statistic="count",
+                bins=(lat_bins[::-1], lon_bins)
+            )[0][::-1]
+            weights /= weights.sum()
+            mask = 0.0 < weights
 
-        time = np.broadcast_to(time[None, None], (lats.size, lons.size))
+            interval = 2 * delta
+            nearest_time = np.argmin(time_diff)
+            surface_precip = data.surface_precip.rolling(time=interval, center=True).mean()[{"time": nearest_time}].data
+            surface_precip_std = data.surface_precip.rolling(time=interval, center=True).std()[{"time": nearest_time}].data
+            p_rain = data.probability_for_rain.rolling(time=interval, center=True).mean()[{"time": nearest_time}].data
+            p_snow = data.probability_for_snow.rolling(time=interval, center=True).mean()[{"time": nearest_time}].data
+            p_mixed = data.probability_for_mixed_phase.rolling(time=interval, center=True).mean()[{"time": nearest_time}].data
+            surface_precip_gauge = data.rain_gauge_precipitation_rate.rolling(time=interval, center=True).mean()[{"time": nearest_time}].data
 
-        results = xr.Dataset({
-            "longitude": (("longitude",), lons),
-            "latitude": (("latitude",), lats),
-            "surface_precip": (("latitude", "longitude"), surface_precip),
-            "surface_precip_30": (("latitude", "longitude"), surface_precip_30),
-            "surface_precip_90": (("latitude", "longitude"), surface_precip_90),
-            "surface_precip_120": (("latitude", "longitude"), surface_precip_120),
-            "surface_precip_gauge": (("latitude", "longitude"), surface_precip_gauge),
-            "probability_of_rain": (("latitude", "longitude"), rain_prob),
-            "probability_of_snow": (("latitude", "longitude"), snow_prob),
-            "probability_of_mixed_phase": (("latitude", "longitude"), mixed_phase_prob),
-            "time": (("latitude", "longitude"), time)
-        })
-        # Account for shrinkage caused by grid-based resampling
+            field = np.nan * np.ones_like(mask)
+            field[mask] = 1.0
+
+            results.append(xr.Dataset({
+                f"weights_{interval}": (("latitude", "longitude"), weights),
+                f"surface_precip_{interval}": (("latitude", "longitude"), field * surface_precip),
+                f"surface_precip_std_{interval}": (("latitude", "longitude"), field * surface_precip_std),
+                f"surface_precip_gauge_{interval}": (("latitude", "longitude"), field * surface_precip_gauge),
+                f"probability_of_rain_{interval}": (("latitude", "longitude"), field * p_rain),
+                f"probability_of_snow_{interval}": (("latitude", "longitude"), field * p_snow),
+                f"probability_of_mixed_{interval}": (("latitude", "longitude"), field * p_mixed),
+            }))
+
+        results = xr.merge(results)
+        results["surface_precip"] = results.surface_precip_60
+        results["longitude"] = (("longitude",), 0.5 * (lon_bins[1:] + lon_bins[:-1]))
+        results["latitude"] = (("latitude",), 0.5 * (lat_bins[1:] + lat_bins[:-1]))
         results.attrs["lower_left_row"] = lower_left_row + 1
         results.attrs["lower_left_col"] = lower_left_col + 1
 
-        input_data = input_granule.open()
-        lats_fp = input_data.latitude if "latitude" in input_data else input_data.latitude_s1
-        lons_fp = input_data.longitude if "longitude" in input_data else input_data.longitude_s1
-        sensor_latitude = input_data.spacecraft_latitude
-        sensor_longitude = input_data.spacecraft_longitude
-        sensor_altitude = input_data.spacecraft_altitude
+        time = data.time[{"time": nearest_time}].data
+        time_field = np.zeros_like(mask, dtype=time.dtype)
+        time_field[:] = time
+        results["time"] = (("latitude", "longitude"), time_field)
 
         if beam_width is None:
             return results, None

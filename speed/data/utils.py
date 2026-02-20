@@ -244,8 +244,10 @@ def save_data_gridded(
     if reference_data.longitude[0] < -179 and reference_data.longitude[-1] > 179:
 
         surface_precip = reference_data.surface_precip.data
-        obs = preprocessor_data.observations.data
-        valid = np.isfinite(surface_precip) * np.isfinite(obs).any(-1)
+        valid = np.isfinite(surface_precip)
+        if "observations" in preprocessor_data:
+            obs = preprocessor_data.observations.data
+            valid *= np.isfinite(obs).any(-1)
         row_inds, col_inds = np.where(valid)
 
         # If collocation crosses the date line, we simply shift it to the left
@@ -264,8 +266,10 @@ def save_data_gridded(
             )
 
     surface_precip = reference_data.surface_precip.data
-    obs = preprocessor_data.observations.data
-    valid = np.isfinite(surface_precip) * np.isfinite(obs).any(-1)
+    valid = np.isfinite(surface_precip)
+    if "observations" in preprocessor_data:
+        obs = preprocessor_data.observations.data
+        valid *= np.isfinite(obs).any(-1)
     row_inds, col_inds = np.where(valid)
 
     # Try to expand collocation by 32 pixels in each direction.

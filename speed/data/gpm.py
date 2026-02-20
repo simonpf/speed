@@ -205,8 +205,11 @@ class GPMInput(InputData):
         self.radius_of_influence = radius_of_influence
 
         characteristics_dir = Path(__file__).parent / "sensor_characteristics"
-        with open(characteristics_dir / (name + ".toml")) as char_file:
-            self.characteristics = toml.loads(char_file.read())
+        try:
+            with open(characteristics_dir / (name + ".toml")) as char_file:
+                self.characteristics = toml.loads(char_file.read())
+        except FileNotFoundError:
+            pass
 
     def process_match(
         self,

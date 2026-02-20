@@ -159,8 +159,11 @@ def load_era5_ancillary_data(
 
     data = []
     for era5_file in era5_sfc_files:
-        print(era5_file)
         with xr.open_dataset(era5_file) as inpt:
+            if "valid_time" in inpt.dims:
+                time = inpt.time.data
+                inpt = inpt.drop_vars(("time",))
+                inpt = inpt.rename_dims(valid_time="time").assign_coords(time=time)
             if roi is not None:
                 lon_min, lat_min, lon_max, lat_max = roi
                 lon_min = (lon_min + 360) % 360
@@ -182,7 +185,8 @@ def load_era5_ancillary_data(
                 inpt = inpt[era5_variables][{"longitude": lon_slice, "latitude": lat_slice}].compute()
             data.append(inpt.rename(**new_names))
 
-    data = xr.concat(data, "time")
+    time_dim = "time" if "time" in data[-1].dims else "valid_time"
+    data = xr.concat(data, time_dim)
 
     lai_data = []
     for era5_file in era5_lai_files:
@@ -192,7 +196,6 @@ def load_era5_ancillary_data(
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
                 if lon_min > lon_max:
-                    lon_min, lon_max = lon_max, lon_min
                     lon_min = 0.0
                     lon_max = 360.0
                 lons = inpt.longitude.data
@@ -208,8 +211,8 @@ def load_era5_ancillary_data(
             inpt = inpt.transpose("time", "latitude", "longitude")
             lai_data.append(inpt[["lai_hv", "lai_lv"]])
 
-    lai_data = xr.concat(lai_data, dim="time")
-    data["leaf_area_index"] = lai_data["lai_hv"] + lai_data["lai_lv"]
+    #lai_data = xr.concat(lai_data, dim="time")
+    #data["leaf_area_index"] = lai_data["lai_hv"] + lai_data["lai_lv"]
 
     lons = data.longitude.data
     lons[lons > 180] -= 360
@@ -479,8 +482,8 @@ def load_gprof_surface_type_data(
     )
     emissivity_data = emissivity_data_all[{"month": month - 1}]
 
-    autosnow_file = find_autosnow_file(ingest_dir, date)
-    autosnow_data = load_autosnow_data(autosnow_file).copy()
+    #autosnow_file = find_autosnow_file(ingest_dir, date)
+    #autosnow_data = load_autosnow_data(autosnow_file).copy()
     if roi is not None:
         lons = autosnow_data.longitude.data
         lats = autosnow_data.latitude.data
@@ -701,31 +704,33 @@ def add_ancillary_data(
     era5_data = load_era5_ancillary_data(
         era5_sfc_files, era5_lai_files, roi=roi
     )
+    #era5_data = era5_data.assign_coords(valid_time=era5_data.time)
     LOGGER.info("Loading surface type data.")
-    surface_type = load_gprof_surface_type_data(
-        ancillary_dir=gprof_ancillary_dir,
-        ingest_dir=gprof_ingest_dir,
-        date=median_time,
-        footprint=FOOTPRINTS[sensor.lower()],
-        resolution=32,
-        roi=roi
-    )
+    #surface_type = load_gprof_surface_type_data(
+    #    ancillary_dir=gprof_ancillary_dir,
+    #    ingest_dir=gprof_ingest_dir,
+    #    date=median_time,
+    #    footprint=FOOTPRINTS[sensor.lower()],
+    #    resolution=32,
+    #    roi=roi
+    #)
     LOGGER.info("Loading elevation.")
     elevation = load_elevation_data(roi=roi)
 
     # Store ancillary data in on-swath geometry
-    ancillary_data = era5_data.interp(
-        latitude=lats_os,
-        longitude=lons_os,
-        time=scan_time
-    ).rename(time="scan_time")
-    surface_type_os = surface_type.interp(
-        latitude=lats_os,
-        longitude=lons_os,
-        method="nearest",
-        kwargs={"fill_value": -1}
-    )
-    ancillary_data["surface_type"] = surface_type_os
+    time_dim = "time" if "time" in era5_data else "valid_time"
+    ancillary_data = era5_data.interp(**{
+        "latitude": lats_os,
+        "longitude": lons_os,
+        time_dim: scan_time
+    }).rename(time="scan_time")
+    #surface_type_os = surface_type.interp(
+    #    latitude=lats_os,
+    #    longitude=lons_os,
+    #    method="nearest",
+    #    kwargs={"fill_value": -1}
+    #)
+    #ancillary_data["surface_type"] = surface_type_os
     elevation_os = elevation.interp(
         latitude=lats_os,
         longitude=lons_os,
@@ -735,7 +740,7 @@ def add_ancillary_data(
         var: {"dtype": "float32", "compression": "zstd"}
         for var in ancillary_data.variables if var != "surface_type"
     }
-    encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
+    #encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
     ancillary_data.to_netcdf(
         path_on_swath,
         group="ancillary_data",
@@ -747,13 +752,13 @@ def add_ancillary_data(
         longitude=lons_g,
         time=time_g,
     )
-    surface_type_g = surface_type.interp(
-        latitude=lats_g,
-        longitude=lons_g,
-        method="nearest",
-        kwargs={"fill_value": -1}
-    )
-    ancillary_data["surface_type"] = surface_type_g
+    #surface_type_g = surface_type.interp(
+    #    latitude=lats_g,
+    #    longitude=lons_g,
+    #    method="nearest",
+    #    kwargs={"fill_value": -1}
+    #)
+    #ancillary_data["surface_type"] = surface_type_g
     elevation_g = elevation.interp(
         latitude=lats_g,
         longitude=lons_g,
@@ -763,7 +768,7 @@ def add_ancillary_data(
         var: {"dtype": "float32", "compression": "zstd"}
         for var in ancillary_data.variables if var != "surface_type"
     }
-    encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
+    #encoding["surface_type"] = {"dtype": "int8", "compression": "zstd"}
     ancillary_data.to_netcdf(
         path_gridded,
         group="ancillary_data",

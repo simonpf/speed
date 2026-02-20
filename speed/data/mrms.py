@@ -100,19 +100,25 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
 
     # Find and resample corresponding radar quality index data.
     rqi_recs = mrms.radar_quality_index.get(precip_rate_rec.central_time)
-    rqi_rec = precip_rate_rec.find_closest_in_time(rqi_recs)[0]
-    if precip_rate_rec.time_difference(rqi_rec).total_seconds() > 0:
-        return None
-    rqi_data = mrms.radar_quality_index.open(rqi_rec)
-    input_files.append(rqi_rec.filename)
+    if 0 < len(rqi_recs):
+        rqi_rec = precip_rate_rec.find_closest_in_time(rqi_recs)[0]
+        if precip_rate_rec.time_difference(rqi_rec).total_seconds() > 0:
+            return None
+        rqi_data = mrms.radar_quality_index.open(rqi_rec)
+        input_files.append(rqi_rec.filename)
+    else:
+        rqi_data = None
 
     # Find and resample precip flag data.
     precip_flag_recs = mrms.precip_flag.get(precip_rate_rec.central_time)
-    precip_flag_rec = precip_rate_rec.find_closest_in_time(precip_flag_recs)[0]
-    if precip_rate_rec.time_difference(precip_flag_rec).total_seconds() > 0:
-        return None
-    precip_flag_data = mrms.precip_flag.open(precip_flag_rec)
-    input_files.append(precip_flag_rec.filename)
+    if 0 < len(precip_flag_recs):
+        precip_flag_rec = precip_rate_rec.find_closest_in_time(precip_flag_recs)[0]
+        if precip_rate_rec.time_difference(precip_flag_rec).total_seconds() > 0:
+            return None
+        precip_flag_data = mrms.precip_flag.open(precip_flag_rec)
+        input_files.append(precip_flag_rec.filename)
+    else:
+        precip_flag_data = None
 
     # Find and resample gauge correction factors.
     precip_1h_gc_recs = mrms.precip_1h_gc.get(precip_rate_rec.central_time)
@@ -163,11 +169,15 @@ def load_mrms_data(granule: Granule) -> Union[xr.Dataset, None]:
     data = xr.Dataset(
         {
             "surface_precip": precip_data.precip_rate * corr_factor_data,
-            "radar_quality_index": rqi_data.radar_quality_index,
-            "precip_type": precip_flag_data.precip_flag,
             "gauge_correction_factor": corr_factor_data,
         }
     )
+
+    if rqi_data is not None:
+        data["radar_quality_index"] = rqi_data.radar_quality_index
+
+    if precip_flag_data is not None:
+        data["precip_type"] = precip_flag_data.precip_flag
 
     data.attrs["input_files"] = input_files
     return data
@@ -191,13 +201,15 @@ def downsample_mrms_data(
         A new xarray.Dataset containing the downsampled MRMS data.
 
     """
-
     valid_mask = (
         (mrms_data["surface_precip"].data >= 0.0)
-        * (mrms_data["precip_type"].data >= 0)
-        * (mrms_data["radar_quality_index"].data >= 0.0)
         * np.isfinite(mrms_data["gauge_correction_factor"].data)
     )
+    if "radar_quality_index" in mrms_data:
+        valid_mask *= (mrms_data["radar_quality_index"].data >= 0.0)
+    if "precip_type" in mrms_data:
+        valid_mask *= (mrms_data["precip_type"].data >= 0)
+
 
     lower_left_row = None
     lower_left_col = None
@@ -231,39 +243,6 @@ def downsample_mrms_data(
     gauge_correction_factor[~valid_mask] = np.nan
     gauge_correction_factor = smooth_field(gauge_correction_factor)
 
-    radar_quality_index = mrms_data["radar_quality_index"].data
-    radar_quality_index[~valid_mask] = np.nan
-    radar_quality_index = smooth_field(radar_quality_index)
-
-    precip_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
-    precip_fraction[~valid_mask] = np.nan
-    precip_fraction = smooth_field(precip_fraction)
-
-    snow_fraction = (
-        (mrms_data["precip_type"].data == 3.0) | (mrms_data["precip_type"].data == 4.0)
-    ).astype(np.float32)
-    snow_fraction[~valid_mask] = np.nan
-    snow_fraction = smooth_field(snow_fraction).astype(np.float32)
-
-    hail_fraction = (mrms_data["precip_type"].data == 7.0).astype(np.float32)
-    hail_fraction[~valid_mask] = np.nan
-    hail_fraction = smooth_field(hail_fraction).astype(np.float32)
-
-    conv_fraction = (
-        (mrms_data["precip_type"].data == 6.0) | (mrms_data["precip_type"].data == 96.0)
-    ).astype(np.float32)
-    conv_fraction[~valid_mask] = np.nan
-    conv_fraction = smooth_field(conv_fraction).astype(np.float32)
-
-    strat_fraction = (
-        (mrms_data["precip_type"].data == 1.0)
-        | (mrms_data["precip_type"].data == 2.0)
-        | (mrms_data["precip_type"].data == 10.0)
-        | (mrms_data["precip_type"].data == 91.0)
-    ).astype(np.float32)
-    strat_fraction[~valid_mask] = np.nan
-    strat_fraction = smooth_field(strat_fraction).astype(np.float32)
-
     smoothed = xr.Dataset(
         {
             "latitude": (("latitude",), mrms_data.latitude.data.astype(np.float32)),
@@ -284,37 +263,9 @@ def downsample_mrms_data(
                 ("latitude", "longitude"),
                 mrms_data.gauge_correction_factor.data.astype(np.float32),
             ),
-            "radar_quality_index": (
-                ("latitude", "longitude"),
-                radar_quality_index.astype(np.float32),
-            ),
-            "radar_quality_index_nn": (
-                ("latitude", "longitude"),
-                mrms_data.radar_quality_index.data.astype(np.float32),
-            ),
             "valid_fraction": (
                 ("latitude", "longitude"),
                 valid_fraction.astype(np.float32),
-            ),
-            "precip_fraction": (
-                ("latitude", "longitude"),
-                precip_fraction.astype(np.float32),
-            ),
-            "snow_fraction": (
-                ("latitude", "longitude"),
-                snow_fraction.astype(np.float32),
-            ),
-            "convective_fraction": (
-                ("latitude", "longitude"),
-                conv_fraction.astype(np.float32),
-            ),
-            "stratiform_fraction": (
-                ("latitude", "longitude"),
-                strat_fraction.astype(np.float32),
-            ),
-            "hail_fraction": (
-                ("latitude", "longitude"),
-                hail_fraction.astype(np.float32),
             ),
             "time": (
                 ("latitude", "longitude"),
@@ -322,6 +273,56 @@ def downsample_mrms_data(
             ),
         }
     )
+
+    if "precip_type" in mrms_data:
+        precip_fraction = (mrms_data["precip_type"].data > 0).astype(np.float32)
+        precip_fraction[~valid_mask] = np.nan
+        precip_fraction = smooth_field(precip_fraction)
+
+        snow_fraction = (
+            (mrms_data["precip_type"].data == 3.0) | (mrms_data["precip_type"].data == 4.0)
+        ).astype(np.float32)
+        snow_fraction[~valid_mask] = np.nan
+        snow_fraction = smooth_field(snow_fraction).astype(np.float32)
+
+        hail_fraction = (mrms_data["precip_type"].data == 7.0).astype(np.float32)
+        hail_fraction[~valid_mask] = np.nan
+        hail_fraction = smooth_field(hail_fraction).astype(np.float32)
+
+        conv_fraction = (
+            (mrms_data["precip_type"].data == 6.0) | (mrms_data["precip_type"].data == 96.0)
+        ).astype(np.float32)
+        conv_fraction[~valid_mask] = np.nan
+        conv_fraction = smooth_field(conv_fraction).astype(np.float32)
+
+        strat_fraction = (
+            (mrms_data["precip_type"].data == 1.0)
+            | (mrms_data["precip_type"].data == 2.0)
+            | (mrms_data["precip_type"].data == 10.0)
+            | (mrms_data["precip_type"].data == 91.0)
+        ).astype(np.float32)
+        strat_fraction[~valid_mask] = np.nan
+        strat_fraction = smooth_field(strat_fraction).astype(np.float32)
+
+        smoothed["precip_fraction"] = (("latitude", "longitude"), precip_fraction.astype(np.float32))
+        smoothed["snow_fraction"]= (("latitude", "longitude"), snow_fraction.astype(np.float32))
+        smoothed["convective_fraction"] = (("latitude", "longitude"), conv_fraction.astype(np.float32))
+        smoothed["stratiform_fraction"] = (("latitude", "longitude"), strat_fraction.astype(np.float32))
+        smoothed["hail_fraction"] = (("latitude", "longitude"), hail_fraction.astype(np.float32))
+
+    if "radar_quality_index" in mrms_data:
+        radar_quality_index = mrms_data["radar_quality_index"].data
+        radar_quality_index[~valid_mask] = np.nan
+        radar_quality_index = smooth_field(radar_quality_index)
+
+        smoothed["radar_quality_index"] = (
+                ("latitude", "longitude"),
+                radar_quality_index.astype(np.float32),
+        )
+        smoothed["radar_quality_index_nn"] = (
+                ("latitude", "longitude"),
+                mrms_data.radar_quality_index.data.astype(np.float32),
+        )
 
     lons, lats = grid.get_lonlats()
     lons = lons[0]
@@ -488,33 +489,38 @@ class MRMS(ReferenceData):
         mrms_data = []
 
         input_data = input_granule.open()
-        if "pixels_s1" in input_data:
-            input_data = input_data.rename(
-                scans="scan",
-                pixels_s1="pixel",
-            )
-        else:
-            input_data = input_data.rename(
-                scans="scan",
-                pixels="pixel",
-            )
 
-        if "latitude_s1" in input_data:
-            input_data = input_data.rename(
-                latitude_s1="latitude", longitude_s1="longitude"
-            )
+        if "scans" in input_data and "pixels" in input_data:
+            if "pixels_s1" in input_data:
+                input_data = input_data.rename(
+                    scans="scan",
+                    pixels_s1="pixel",
+                )
+            else:
+                input_data = input_data.rename(
+                    scans="scan",
+                    pixels="pixel",
+                )
 
-        input_data = input_data[
-            [
-                "scan_time",
-                "latitude",
-                "longitude",
+            if "latitude_s1" in input_data:
+                input_data = input_data.rename(
+                    latitude_s1="latitude", longitude_s1="longitude"
+                )
+
+        variables = [
+            "scan_time",
+            "latitude",
+            "longitude",
+        ]
+        if "spacecraft_altitude" in input_data:
+            variables += [
                 "spacecraft_latitude",
                 "spacecraft_longitude",
                 "spacecraft_altitude",
             ]
-        ]
-        input_data = input_data.reset_coords(names=["scan_time"])
+
+        time_var = "scan_time" if "scan_time" in input_data else "time"
+        input_data = input_data.reset_coords(names=[time_var])
         lons_input = input_data.longitude.data
         lats_input = input_data.latitude.data
 
@@ -576,12 +582,13 @@ class MRMS(ReferenceData):
 
         area = SwathDefinition(lons=lons, lats=lats)
 
-        scan_time, _ = xr.broadcast(input_data.scan_time, input_data.latitude)
+        time_var = "scan_time" if "scan_time" in input_data else "time"
+        scan_time, _ = xr.broadcast(input_data[time_var], input_data.latitude)
         dtype = scan_time.dtype
-        input_data["scan_time"] = scan_time.astype("int64")
+        input_data[time_var] = scan_time.astype("int64")
         scan_time = resample_data(
-            input_data, area, radius_of_influence=radius_of_influence
-        )["scan_time"].astype(dtype)
+            input_data[[time_var]], area, radius_of_influence=radius_of_influence
+        )[time_var].astype(dtype)
         mrms_data = interp_along_swath(
             mrms_data.sortby("time"), scan_time, dimension="time"
         )
