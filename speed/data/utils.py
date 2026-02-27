@@ -27,6 +27,36 @@ import xarray as xr
 LOGGER = logging.getLogger(__name__)
 
 
+def get_lon_lat_bins(lons: np.ndarray, lats: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get longitude and latitude bins from center points.
+
+    Args:
+        lons: The array containing the longitudes.
+        lats: The array containing the latitudes.
+
+    Return:
+        A tuple containing the longitude and latitude bins for the domain.
+    """
+    if lons.ndim == 2:
+        lons = lons[0]
+
+    if lats.ndim == 2:
+        lats = lats[..., 0]
+
+    lon_bins = np.zeros(lons.size + 1)
+    lon_bins[1:-1] = 0.5 * (lons[1:] + lons[:-1])
+    lon_bins[0] = lon_bins[1] - (lon_bins[2] - lon_bins[1])
+    lon_bins[-1] = lon_bins[-2] + (lon_bins[-2] - lon_bins[-3])
+
+    lat_bins = np.zeros(lats.size + 1)
+    lat_bins[1:-1] = 0.5 * (lats[1:] + lats[:-1])
+    lat_bins[0] = lat_bins[1] - (lat_bins[2] - lat_bins[1])
+    lat_bins[-1] = lat_bins[-2] + (lat_bins[-2] - lat_bins[-3])
+
+    return lon_bins, lat_bins
+
+
 def get_smoothing_kernel(fwhm: float, grid_resolution: float) -> np.ndarray:
     """
     Calculate Gaussian smoothing kernel with a given full width at half

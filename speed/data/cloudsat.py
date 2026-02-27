@@ -40,6 +40,7 @@ from speed.data.utils import (
     calculate_swath_resample_indices,
     resample_data,
     get_useful_scan_range,
+    get_lon_lat_bins
 )
 from speed.data.reference import ReferenceData
 from speed.data.input import InputData
@@ -49,34 +50,6 @@ from speed import grids
 LOGGER = logging.getLogger(__file__)
 
 
-def get_lon_lat_bins(lons: np.ndarray, lats: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Get longitude and latitude bins from center points.
-
-    Args:
-        lons: The array containing the longitudes.
-        lats: The array containing the latitudes.
-
-    Return:
-        A tuple containing the longitude and latitude bins for the domain.
-    """
-    if lons.ndim == 2:
-        lons = lons[0]
-
-    if lats.ndim == 2:
-        lats = lats[..., 0]
-
-    lon_bins = np.zeros(lons.size + 1)
-    lon_bins[1:-1] = 0.5 * (lons[1:] + lons[:-1])
-    lon_bins[0] = lon_bins[1] - (lon_bins[2] - lon_bins[1])
-    lon_bins[-1] = lon_bins[-2] + (lon_bins[-2] - lon_bins[-3])
-
-    lat_bins = np.zeros(lats.size + 1)
-    lat_bins[1:-1] = 0.5 * (lats[1:] + lats[:-1])
-    lat_bins[0] = lat_bins[1] - (lat_bins[2] - lat_bins[1])
-    lat_bins[-1] = lat_bins[-2] + (lat_bins[-2] - lat_bins[-3])
-
-    return lon_bins, lat_bins
 
 
 class CloudSatInput(InputData):
@@ -117,13 +90,15 @@ class CloudSatInput(InputData):
         pflag = cs_data["precip_flag"].data
         surface_precip = cs_data["surface_precip"].data
         surface_precip_snow = cs_data["surface_precip_snow"].data
+        surface_precip_pc = precip_column_data["surface_precip"]
         total_precip = np.nan * np.zeros_like(surface_precip)
         total_precip[pflag == 0] = 0.0
         total_precip[surface_precip > 0] = surface_precip[surface_precip > 0]
         total_precip[surface_precip_snow > 0] = surface_precip_snow[surface_precip_snow > 0]
         cs_data["total_precip"] = (("rays",), total_precip)
+        cs_data["surface_precip_pc"] = (("rays",), surface_precip_pc)
+        cs_data["surface_snow_quality"] = (("rays",), surface_precip_snow["surface_snowfall_confidence"].data)
         cs_data = cs_data.assign_coords(scan_time=cs_data["time"])
-        print(cs_data)
 
         return cs_data
 

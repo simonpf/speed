@@ -23,7 +23,9 @@ from pansat.products.satellite.gpm import (
     l1c_noaa20_atms,
     l1c_f17_ssmis,
     l1c_gcomw1_amsr2,
-    l1c_r_gpm_gmi
+    l1c_r_gpm_gmi,
+    l2b_gpm_cmb
+
 )
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
@@ -32,6 +34,7 @@ from pyresample import kd_tree
 import toml
 
 import numpy as np
+from scipy.stats import binned_statistic_2d
 import xarray as xr
 
 from speed.data.utils import (
@@ -42,6 +45,7 @@ from speed.data.utils import (
     calculate_swath_resample_indices,
     resample_data,
     get_useful_scan_range,
+    get_lon_lat_bins
 )
 from speed.data.reference import ReferenceData
 from speed.data.input import InputData
@@ -517,3 +521,172 @@ atms = GPMInput("atms", ATMS_PRODUCTS, beam_width=None, radius_of_influence=64e3
 
 SSMIS_PRODUCTS = [l1c_f17_ssmis]
 ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+
+
+class CMBInput(GPMInput):
+    """
+    The CloudSatInput class provides functionality to combine precipitation estimates from
+    the CloudSat mission with reference data.
+    """
+    def __init__(self):
+        super().__init__(
+            "cmb",
+            [l2b_gpm_cmb],
+            radius_of_influence=5e3,
+            beam_width=None
+        )
+
+
+    def load_cmb_data(self, cmb_granule) -> xr.Dataset:
+        """
+        Load CMB data from matched granule.
+        """
+        cmb_data = cmb_granule.open()
+        cmb_data = cmb_data[["scan_time", "latitude", "longitude", "estim_surf_precip_tot_rate"]]
+        cmb_data = cmb_data.rename(estim_surf_precip_tot_rate="surface_precip")
+        return cmb_data
+
+    def process_match(
+        self,
+        match: Tuple[Granule, List[Granule]],
+        reference_data: ReferenceData,
+        output_folder: Path,
+        min_area: float = 0.0
+    ) -> None:
+        """
+        Extract collocations from matched input and reference data.
+
+        Args:
+            match: A tuple ``(inpt_granule, output_granules)`` describing
+                a match of a granule of input data and multiple granules of
+                reference data.
+            reference_data: The reference data object to use to load the
+                reference data for the matched granules.
+            output_folder: The base folder to which to write the extracted
+                collocations in on_swath and gridded format.
+            min_area: A minimum area in square degree below which collocations
+                are discarded.
+        """
+        inpt_granule, ref_granules = match
+        ref_granules = list(ref_granules)
+
+        cmb_data = self.load_cmb_data(inpt_granule)
+
+        # Load and combine reference data for all matche granules
+        ref_data, ref_data_fpavg = reference_data.load_reference_data(
+            inpt_granule,
+            ref_granules,
+            radius_of_influence=5e3,
+            beam_width=None
+        )
+        if ref_data is None:
+            LOGGER.info(
+                "No reference data for %s.",
+                ref_granules
+            )
+            return None
+
+        reference_data_r = ref_data.interp(
+            latitude=cmb_data.latitude,
+            longitude=cmb_data.longitude,
+            method="nearest",
+        )
+        reference_data_r["time"] = ref_data.time.astype(np.int64).interp(
+            latitude=cmb_data.latitude,
+            longitude=cmb_data.longitude,
+            method="nearest"
+        ).astype("datetime64[ns]")
+
+        if ref_data_fpavg is not None:
+            for var in ref_data_fpavg:
+                if var in reference_data_r:
+                    reference_data_r[var + "_fpavg"] = ref_data_fpavg[var]
+
+
+        row_start = ref_data.attrs.get("lower_left_row", 0)
+        n_rows = ref_data.latitude.size
+        col_start = ref_data.attrs.get("lower_left_col", 0)
+        n_cols = ref_data.longitude.size
+
+        # Determine number of valid reference pixels in scene.
+        if "surface_precip" in reference_data_r:
+            surface_precip = reference_data_r.surface_precip.data
+        else:
+            surface_precip = reference_data_r.surface_precip_combined.data
+        if np.isfinite(surface_precip).sum() < 1:
+            LOGGER.info(
+                "Skipping match because it contains only %s valid "
+                " surface precip pixels.",
+                np.isfinite(surface_precip).sum(),
+            )
+            return None
+
+        grid = grids.GLOBAL.grid[
+            row_start:row_start + n_rows,
+            col_start:col_start + n_cols
+        ]
+
+        cmb_input_file = inpt_granule.file_record.filename
+        cmb_data.attrs["cmb_input_file"] = cmb_input_file
+
+        # Save data in on_swath format.
+        LOGGER.info(
+            "Saving file in on_swath format to %s.",
+            output_folder
+        )
+        time = save_data_on_swath(
+            self.name,
+            reference_data.name,
+            cmb_data,
+            reference_data_r,
+            output_folder,
+            min_scans=128
+        )
+
+        lons, lats = grid.get_lonlats()
+        lon_bins, lat_bins = get_lon_lat_bins(lons, lats)
+        lat_bins = np.flip(lat_bins)
+
+        cmb_data_r = {}
+        for var in [ "surface_precip"]:
+            vals = cmb_data[var].data
+            lats = cmb_data.latitude.data
+            lons = cmb_data.longitude.data
+
+            mask = np.isfinite(vals)
+            if mask.sum() == 0:
+                vals_r = np.nan * np.zeros((lon_bins.size - 1, lat_bins.size - 1))
+            else:
+                vals_r = binned_statistic_2d(
+                    lons[mask], lats[mask], vals[mask], bins=(lon_bins, lat_bins)
+                )[0][:, ::-1]
+            cmb_data_r[var] = (("latitude", "longitude"), vals_r.T)
+
+        lat_bins = np.flip(lat_bins)
+        lats = 0.5 * (lat_bins[1:] + lat_bins[:-1])
+        lons = 0.5 * (lon_bins[1:] + lon_bins[:-1])
+        cmb_data_r['latitude'] = (('latitude',), lats)
+        cmb_data_r['longitude'] = (('longitude',), lons)
+        cmb_data_r = xr.Dataset(cmb_data_r)
+
+        LOGGER.info(
+            "Saving file in gridded format to %s.",
+            output_folder
+        )
+        save_data_gridded(
+            self.name,
+            reference_data.name,
+            time,
+            cmb_data_r,
+            ref_data,
+            output_folder,
+            min_size=256
+        )
+
+        del reference_data
+        del reference_data_r
+        del cmb_data
+        del cmb_data_r
+
+
+CMB = CMBInput()
