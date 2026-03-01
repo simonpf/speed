@@ -50,8 +50,6 @@ from speed import grids
 LOGGER = logging.getLogger(__file__)
 
 
-
-
 class CloudSatInput(InputData):
     """
     The CloudSatInput class provides functionality to combine precipitation estimates from
@@ -59,7 +57,6 @@ class CloudSatInput(InputData):
     """
     def __init__(self):
         super().__init__("cloudsat")
-
 
     def load_cloudsat_data(self, cs_granule) -> xr.Dataset:
         """
@@ -90,14 +87,15 @@ class CloudSatInput(InputData):
         pflag = cs_data["precip_flag"].data
         surface_precip = cs_data["surface_precip"].data
         surface_precip_snow = cs_data["surface_precip_snow"].data
-        surface_precip_pc = precip_column_data["surface_precip"]
+        surface_precip_pc = precip_column_data["surface_precip"].data
         total_precip = np.nan * np.zeros_like(surface_precip)
         total_precip[pflag == 0] = 0.0
         total_precip[surface_precip > 0] = surface_precip[surface_precip > 0]
         total_precip[surface_precip_snow > 0] = surface_precip_snow[surface_precip_snow > 0]
         cs_data["total_precip"] = (("rays",), total_precip)
         cs_data["surface_precip_pc"] = (("rays",), surface_precip_pc)
-        cs_data["surface_snow_quality"] = (("rays",), surface_precip_snow["surface_snowfall_confidence"].data)
+        cs_data["surface_precip_quality"] = (("rays",), cs_data["rain_quality_flag"].data)
+        cs_data["surface_snow_quality"] = (("rays",), snow_profile_data["surface_snowfall_confidence"].data)
         cs_data = cs_data.assign_coords(scan_time=cs_data["time"])
 
         return cs_data
@@ -247,7 +245,6 @@ class CloudSatInput(InputData):
         del reference_data_r
         del cs_data
         del cs_data_r
-
 
     def process_day(
         self,
