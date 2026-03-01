@@ -24,8 +24,8 @@ from pansat.products.satellite.gpm import (
     l1c_f17_ssmis,
     l1c_gcomw1_amsr2,
     l1c_r_gpm_gmi,
-    l2b_gpm_cmb
-
+    l2b_gpm_cmb,
+    l1c_xcal2025n_tropics03_tms_parv804,
 )
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
@@ -522,7 +522,6 @@ atms = GPMInput("atms", ATMS_PRODUCTS, beam_width=None, radius_of_influence=64e3
 SSMIS_PRODUCTS = [l1c_f17_ssmis]
 ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)
 
-
 class CMBInput(GPMInput):
     """
     The CloudSatInput class provides functionality to combine precipitation estimates from
@@ -690,3 +689,5 @@ class CMBInput(GPMInput):
 
 
 CMB = CMBInput()
+TROPICS_PRODUCTS = [l1c_xcal2025n_tropics03_tms_parv804]
+tropics = GPMInput("tropics", TROPICS_PRODUCTS, beam_width=None, radius_of_influence=60e3)
