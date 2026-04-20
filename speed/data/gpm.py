@@ -1,6 +1,5 @@
 """
 speed.data.gpm.
-
 ==============
 
 This module contains the code to process GPM L1C data into SPEED collocations.

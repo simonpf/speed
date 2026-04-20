@@ -502,10 +502,10 @@ class MRMS(ReferenceData):
                     pixels="pixel",
                 )
 
-            if "latitude_s1" in input_data:
-                input_data = input_data.rename(
-                    latitude_s1="latitude", longitude_s1="longitude"
-                )
+        if "latitude_s1" in input_data:
+            input_data = input_data.rename(
+                latitude_s1="latitude", longitude_s1="longitude"
+            )
 
         variables = [
             "scan_time",
