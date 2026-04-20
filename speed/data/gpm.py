@@ -25,6 +25,7 @@ from pansat.products.satellite.gpm import (
     l1c_r_gpm_gmi,
     l2b_gpm_cmb,
     l1c_xcal2025n_tropics03_tms_parv804,
+    l1c_xcal2026v_wsfm1_mwi_parv817
 )
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
@@ -289,8 +290,9 @@ class GPMInput(InputData):
         )
         preprocessor_data["observations"] = (("scan", "pixel", "channel"), tbs_mw.data)
         preprocessor_data["earth_incidence_angle"] = (("scan", "pixel", "channel"), eia_mw.data)
-        preprocessor_data["observations"].attrs.update(self.characteristics["channels"])
-        preprocessor_data["observations_gprof"].attrs.update(self.characteristics["channels_gprof"])
+        if hasattr(self, "characteristics"):
+            preprocessor_data["observations"].attrs.update(self.characteristics["channels"])
+            preprocessor_data["observations_gprof"].attrs.update(self.characteristics["channels_gprof"])
 
         # Load and combine reference data for all matche granules
         ref_data, ref_data_fpavg = reference_data.load_reference_data(
@@ -450,9 +452,9 @@ class GPMInput(InputData):
 
             LOGGER.info("Getting input data for product %s.", product.name)
             # Get all available files of GPM product for given day.
-            lock = FileLock("gpm_inpt.lock")
-            with lock:
-                gpm_recs = product.get(time_range)
+            #lock = FileLock("gpm_inpt.lock")
+            #with lock:
+            gpm_recs = product.get(time_range)
             gpm_index = Index.index(product, gpm_recs)
             LOGGER.info(
                 "Found %s files for %s/%s/%s.",
@@ -466,11 +468,11 @@ class GPMInput(InputData):
                 LOGGER.info("Found %s granules over ROI.", len(gpm_index.data))
 
             # Collect available reference data.
-            lock = FileLock("gpm_ref.lock")
+            #lock = FileLock("gpm_ref.lock")
             reference_recs = []
-            with lock:
-                for granule in gpm_index.granules:
-                    reference_recs += reference_data.pansat_product.get(granule.time_range)
+            #with lock:
+            for granule in gpm_index.granules:
+                reference_recs += reference_data.pansat_product.get(granule.time_range)
             LOGGER.info("Indexing reference data.")
             reference_index = Index.index(reference_data.pansat_product, reference_recs)
             #reference_index = get_index(reference_data.pansat_product, recurrent=False).subset(time_range=time_range)
@@ -520,6 +522,9 @@ atms = GPMInput("atms", ATMS_PRODUCTS, beam_width=None, radius_of_influence=64e3
 
 SSMIS_PRODUCTS = [l1c_f17_ssmis]
 ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+
+MWI_PRODUCTS = [l1c_xcal2026v_wsfm1_mwi_parv817]
+mwi = GPMInput("mwi", MWI_PRODUCTS, beam_width=None, radius_of_influence=20e3)
 
 class CMBInput(GPMInput):
     """
