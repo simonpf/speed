@@ -129,7 +129,7 @@ def add_goes_obs(
     time_steps = rounded + offsets
 
     if sector.lower() == "conus":
-        products = [GOES16L1BRadiances("C", channel) for channel in range(1, 17)]
+        products = [GOES16L1BRadiances("F", channel) for channel in range(1, 17)]
     else:
         products = [GOES16L1BRadiances("F", channel) for channel in range(1, 17)]
 

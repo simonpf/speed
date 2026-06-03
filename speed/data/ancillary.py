@@ -169,7 +169,8 @@ def load_era5_ancillary_data(
                 lon_min = (lon_min + 360) % 360
                 lon_max = (lon_max + 360) % 360
                 if lon_min > lon_max:
-                    lon_min, lon_max = lon_max, lon_min
+                    lon_min = 0.0
+                    lon_max = 360.0
                 lons = inpt.longitude.data
                 lats = inpt.latitude.data
                 lon_min -= 1.0
