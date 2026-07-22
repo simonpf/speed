@@ -13,7 +13,6 @@ from pathlib import Path
 import shutil
 from typing import List, Optional, Tuple, Union
 
-from gprof_nn.data.l1c import L1CFile
 from pansat.time import to_datetime, to_datetime64, to_timedelta64
 from tqdm import tqdm
 
@@ -153,6 +152,7 @@ def extract_scans(granule: Granule, dest: Path, min_scans: Optional[int] = None)
     Return:
         The path of the file containing the extracted scans.
     """
+    from gprof_nn.data.l1c import L1CFile
     scan_start, scan_end = granule.primary_index_range
     n_scans = scan_end - scan_start
     if min_scans is not None and n_scans < min_scans:
