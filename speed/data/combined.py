@@ -18,7 +18,8 @@ from pansat.catalog import Index
 from pansat.products.satellite.gpm import (
     l2b_gpm_cmb,
     l1c_r_gpm_gmi,
-    l2a_gpm_dpr_slh
+    l2a_gpm_dpr_slh,
+    l2b_corra2022t_trmm_prtmi_v07a
 )
 from pansat.granule import merge_granules
 
@@ -93,9 +94,16 @@ class Combined(ReferenceData):
     Extracts surface precipitation from GPM CMB and MIRS.
     """
 
-    def __init__(self, name, include_mirs: bool):
-        super().__init__(name, None, l2b_gpm_cmb)
+    def __init__(
+            self,
+            name,
+            include_mirs: bool,
+            include_profiles: bool = False,
+            pansat_product = l2b_gpm_cmb
+    ):
+        super().__init__(name, None, pansat_product)
         self.include_mirs = include_mirs
+        self.include_profiles = include_profiles
 
     def load_reference_data(
         self,
@@ -124,13 +132,14 @@ class Combined(ReferenceData):
         cmb_filenames = []
 
         for granule in granules:
-            gmi_files = l1c_r_gpm_gmi.get(time_range=granule.time_range)
-            index = Index.index(l1c_r_gpm_gmi, gmi_files)
-            gmi_granules = merge_granules(
-                index.find(time_range=granule.time_range, roi=granule.geometry)
-            )
 
             if self.include_mirs:
+                gmi_files = l1c_r_gpm_gmi.get(time_range=granule.time_range)
+                index = Index.index(l1c_r_gpm_gmi, gmi_files)
+                gmi_granules = merge_granules(
+                    index.find(time_range=granule.time_range, roi=granule.geometry)
+                )
+
                 mirs_data = run_mirs(granule, gmi_granules[0])
                 gmi_filenames.append(gmi_granules[0].file_record.filename)
                 results_mirs.append(mirs_data)
@@ -162,21 +171,24 @@ class Combined(ReferenceData):
                 "ice_water_content",
                 "liquid_water_content"
             ]
-            for var in profiles:
-                var_data = cmb_data[var]
-                var_data = var_data.where(var_data > -9000)
-                if "vertical_bins" in var_data.dims:
-                    var_data = var_data.ffill("vertical_bins")
-                var_data.data[:] = var_data.data[..., ::-1]
-                cmb_data[var] = var_data.astype(np.float32)
-            cmb_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(88))
+            if self.include_profiles:
+                for var in profiles:
+                    var_data = cmb_data[var]
+                    var_data = var_data.where(var_data > -9000)
+                    if "vertical_bins" in var_data.dims:
+                        var_data = var_data.ffill("vertical_bins")
+                    var_data.data[:] = var_data.data[..., ::-1]
+                    cmb_data[var] = var_data.astype(np.float32)
+                cmb_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(88))
 
-            swc = cmb_data.total_water_content - cmb_data.rain_water_content
-            cmb_data["snow_water_content"] = swc
-            cmb_data["snow_water_path"] = swc.integrate("vertical_bins")
-            cmb_data["rain_water_path"] = cmb_data["rain_water_content"].integrate("vertical_bins")
-            cmb_data["ice_water_path"] = cmb_data["ice_water_content"].integrate("vertical_bins")
-            cmb_data["liquid_water_path"] = cmb_data["liquid_water_content"].integrate("vertical_bins")
+                swc = cmb_data.total_water_content - cmb_data.rain_water_content
+                cmb_data["snow_water_content"] = swc
+                cmb_data["snow_water_path"] = swc.integrate("vertical_bins")
+                cmb_data["rain_water_path"] = cmb_data["rain_water_content"].integrate("vertical_bins")
+                cmb_data["ice_water_path"] = cmb_data["ice_water_content"].integrate("vertical_bins")
+                cmb_data["liquid_water_path"] = cmb_data["liquid_water_content"].integrate("vertical_bins")
+            else:
+                cmb_data = cmb_data.drop_vars(profiles)
 
             cmb_type = cmb_data["precipitation_type"].data.astype("int64")
             precip_type = np.zeros_like(cmb_type, dtype="uint")
@@ -193,41 +205,42 @@ class Combined(ReferenceData):
             cmb_data = cmb_data.interp(vertical_bins=target_levels)
             cmb_data["vertical_bins"] = (("vertical_bins",), target_levels)
 
-            lock = FileLock("slh.lock")
-            with lock:
-                start_time = cmb_data["scan_time"].data[0]
-                end_time = cmb_data["scan_time"].data[-1]
-                central_time = start_time + 0.5 * (end_time - start_time)
-                slh_recs = l2a_gpm_dpr_slh.get(central_time)
-                if len(slh_recs) > 0:
-                    if len(slh_recs) > 1:
-                        LOGGER.error(
-                            "Found more than 1 SLH record!"
-                        )
-                        return None
-                    scan_start, scan_end = granule.primary_index_range
-                    slh_data = l2a_gpm_dpr_slh.open(slh_recs[0], slcs={"scans": slice(scan_start, scan_end)})
-                    slh_data = slh_data[["latent_heating"]].rename({
-                        "scans": "matched_scans",
-                        "pixels": "matched_pixels"
-                    })
-                    slh_data = slh_data.assign_coords(matched_scans=cmb_data.matched_scans.data)
-                    mask = slh_data.latent_heating.data < -9000
-                    slh_data["latent_heating"].data[mask] = np.nan
-                    slh_data = slh_data.bfill("vertical_bins")
-                    if np.all(np.isnan(slh_data["latent_heating"].data)):
+            if self.include_profiles:
+                lock = FileLock("slh.lock")
+                with lock:
+                    start_time = cmb_data["scan_time"].data[0]
+                    end_time = cmb_data["scan_time"].data[-1]
+                    central_time = start_time + 0.5 * (end_time - start_time)
+                    slh_recs = l2a_gpm_dpr_slh.get(central_time)
+                    if len(slh_recs) > 0:
+                        if len(slh_recs) > 1:
+                            LOGGER.error(
+                                "Found more than 1 SLH record!"
+                            )
+                            return None
+                        scan_start, scan_end = granule.primary_index_range
+                        slh_data = l2a_gpm_dpr_slh.open(slh_recs[0], slcs={"scans": slice(scan_start, scan_end)})
+                        slh_data = slh_data[["latent_heating"]].rename({
+                            "scans": "matched_scans",
+                            "pixels": "matched_pixels"
+                        })
+                        slh_data = slh_data.assign_coords(matched_scans=cmb_data.matched_scans.data)
+                        mask = slh_data.latent_heating.data < -9000
+                        slh_data["latent_heating"].data[mask] = np.nan
+                        slh_data = slh_data.bfill("vertical_bins")
+                        if np.all(np.isnan(slh_data["latent_heating"].data)):
+                            LOGGER.warning(
+                                "No valid latent heating rates in SLH data."
+                            )
+                        slh_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(80))
+                        slh = slh_data.latent_heating.interp(vertical_bins=target_levels)
+                    else:
                         LOGGER.warning(
-                            "No valid latent heating rates in SLH data."
+                            "Found no SLH records for %s.", granule.time_range
                         )
-                    slh_data["vertical_bins"] = (("vertical_bins"), 0.125 + 0.25 * np.arange(80))
-                    slh = slh_data.latent_heating.interp(vertical_bins=target_levels)
-                else:
-                    LOGGER.warning(
-                        "Found no SLH records for %s.", granule.time_range
-                    )
-                    slh = xr.DataArray(np.zeros_like(swc.data), dims=("scans", "pixels", "vertical_bins"))
+                        slh = xr.DataArray(np.zeros_like(swc.data), dims=("scans", "pixels", "vertical_bins"))
 
-            cmb_data["latent_heating"] = slh
+                cmb_data["latent_heating"] = slh
 
             results_cmb.append(cmb_data)
             cmb_filenames.append(granule.file_record.filename)
@@ -251,7 +264,7 @@ class Combined(ReferenceData):
         cols = np.where((lon_min <= lons) * (lon_max >= lons))[0]
         col_start = cols.min()
         col_end = cols.max()
-        assert col_end - col_start < 3500
+        #assert col_end - col_start < 3500
 
         lat_min = cmb_data.latitude.data.min()
         lat_max = cmb_data.latitude.data.max()
@@ -281,10 +294,6 @@ class Combined(ReferenceData):
             data_r = xr.merge([mirs_data_r, data_r])
             data_r.attrs["gmi_l1c_files"] = ",".join(str(gmi_filenames))
 
-        if shifted:
-            lons = data_r.longitude.data
-            lons[:] = (lons + 360) % 360 - 180
-
         data_r.attrs["lower_left_col"] = col_start
         data_r.attrs["lower_left_row"] = row_start
 
@@ -293,16 +302,19 @@ class Combined(ReferenceData):
 
         float_vars = [
             "surface_precip",
-            "total_water_content",
-            "rain_water_content",
-            "ice_water_content",
-            "liquid_water_content",
-            "snow_water_path",
-            "rain_water_path",
-            "ice_water_path",
-            "liquid_water_path",
-            "latent_heating"
         ]
+        if self.include_profiles:
+            float_vars += [
+                "total_water_content",
+                "rain_water_content",
+                "ice_water_content",
+                "liquid_water_content",
+                "snow_water_path",
+                "rain_water_path",
+                "ice_water_path",
+                "liquid_water_path",
+                "latent_heating"
+            ]
         for var in float_vars:
             data_r[var].encoding = float_encoding
         data_r["precipitation_type"].encoding = int_encoding
@@ -317,3 +329,8 @@ class Combined(ReferenceData):
 
 gpm_cmb = Combined("cmb", include_mirs=False)
 gpm_cmb_w_mirs = Combined("cmb_w_mirs", include_mirs=True)
+trmm_cmb = Combined(
+    "trmm_cmb",
+    include_mirs=False,
+    pansat_product=l2b_corra2022t_trmm_prtmi_v07a
+)

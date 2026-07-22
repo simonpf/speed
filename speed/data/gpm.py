@@ -25,7 +25,11 @@ from pansat.products.satellite.gpm import (
     l1c_r_gpm_gmi,
     l2b_gpm_cmb,
     l1c_xcal2025n_tropics03_tms_parv804,
-    l1c_xcal2026v_wsfm1_mwi_parv817
+    l1c_xcal2026v_wsfm1_mwi_parv817,
+    l1c_xcal2018v_f15_ssmi_v07a,
+    l1c_xcal2017v_noaa15_amsub_v07a,
+    l1c_xcal2017v_aqua_amsre_v07a,
+    l1c_xcal2021v_trmm_tmi_v07a,
 )
 from pansat.catalog import Index
 from pansat.catalog.index import find_matches
@@ -170,12 +174,17 @@ def load_l1c_brightness_temperatures(
             fill_value=np.nan
         )
         if eia_s.ndim < tbs[-1].ndim:
-            eia_s = np.broadcast_to(eia_s[..., None], tbs[-1].shape)
+            eia_s = eia_s[..., None]
+        if eia_s.shape[-1] < tbs[-1].shape[-1]:
+            eia_s = np.broadcast_to(eia_s, tbs[-1].shape)
+
         eia.append(eia_s)
+        print("SWATH :: ", swath, tbs[-1].shape, eia[-1].shape)
         swath += 1
 
     tbs = np.concatenate(tbs, axis=-1)
     eia = np.concatenate(eia, axis=-1)
+
     invalid = tbs < 0
     tbs[invalid] = np.nan
     return tbs, eia
@@ -525,6 +534,19 @@ ssmis = GPMInput("ssmis", SSMIS_PRODUCTS, beam_width=None, radius_of_influence=2
 
 MWI_PRODUCTS = [l1c_xcal2026v_wsfm1_mwi_parv817]
 mwi = GPMInput("mwi", MWI_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+
+SSMI_PRODUCTS = [l1c_xcal2018v_f15_ssmi_v07a]
+ssmi = GPMInput("ssmi", SSMI_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+
+AMSUB_PRODUCTS = [l1c_xcal2017v_noaa15_amsub_v07a]
+amsub = GPMInput("amsub", AMSUB_PRODUCTS, beam_width=None, radius_of_influence=64e3)
+
+AMSRE_PRODUCTS = [l1c_xcal2017v_aqua_amsre_v07a]
+amsre = GPMInput("amsre", AMSRE_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+
+TMI_PRODUCTS = [l1c_xcal2021v_trmm_tmi_v07a]
+tmi = GPMInput("tmi", TMI_PRODUCTS, beam_width=None, radius_of_influence=20e3)
+
 
 class CMBInput(GPMInput):
     """
