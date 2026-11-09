@@ -220,12 +220,36 @@ def save_data_on_swath(
     on_swath_path = output_path / "on_swath"
     on_swath_path.mkdir(exist_ok=True, parents=True)
 
-    time = to_datetime(preprocessor_data.scan_time.mean().data)
+    if "scan_time" in preprocessor_data:
+        time = to_datetime(preprocessor_data.scan_time.mean().data)
+    else:
+        time = to_datetime(preprocessor_data.time.mean().data)
     fname = time.strftime(f"{reference_data_name}_{sensor_name}_%Y%m%d%H%M%S.nc")
 
     output_file = on_swath_path / fname
-    preprocessor_data.to_netcdf(output_file, group="input_data")
-    reference_data.to_netcdf(output_file, group="reference_data", mode="a")
+    default_encoding = {"zlib": True, "complevel": 5}
+    encoding = {
+        var:
+        preprocessor_data[var].encoding | default_encoding
+        for var in preprocessor_data
+    }
+    preprocessor_data.to_netcdf(
+        output_file,
+        group="input_data",
+        engine="h5netcdf",
+        encoding=encoding
+    )
+    encoding = {
+        var: reference_data[var].encoding | default_encoding
+        for var in reference_data
+    }
+    reference_data.to_netcdf(
+        output_file,
+        group="reference_data",
+        mode="a",
+        engine="h5netcdf",
+        encoding=encoding
+    )
     return time
 
 
@@ -332,10 +356,22 @@ def save_data_gridded(
 
     output_file = gridded_path / fname
 
-    encoding = {var: {"zlib": True, "complevel": 5} for var in preprocessor_data}
-    preprocessor_data.to_netcdf(output_file, group="input_data", encoding=encoding)
-    encoding = {var: {"zlib": True, "complevel": 5} for var in reference_data}
-    reference_data.to_netcdf(output_file, group="reference_data", mode="a", encoding=encoding)
+    default_encoding = {"zlib": True, "complevel": 5}
+    encoding = {
+        var: preprocessor_data[var].encoding | default_encoding
+        for var in preprocessor_data
+    }
+    preprocessor_data.to_netcdf(
+        output_file, group="input_data", encoding=encoding, engine="h5netcdf"
+    )
+    encoding = {
+        var: reference_data[var].encoding | default_encoding
+        for var in reference_data
+    }
+    reference_data.to_netcdf(
+        output_file, group="reference_data", mode="a", encoding=encoding,
+        engine="h5netcdf"
+    )
 
 
 def resample_data(
@@ -458,7 +494,7 @@ def calculate_grid_resample_indices(dataset, target_grid):
     )
     ind_in, ind_out, inds, _ = info
 
-    dims = ("scan", "pixel")
+    dims = dataset.longitude.dims
 
     row_inds_r = kd_tree.get_sample_from_neighbour_info(
         "nn", swath.shape, row_inds, ind_in, ind_out, inds, fill_value=-1

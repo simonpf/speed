@@ -60,6 +60,7 @@ def extract_data(
     import speed.data.ocean_rain
     import speed.data.mrms
     import speed.data.ibtracks
+    import speed.data.earth_care
 
     input_dataset = get_input_dataset(input_data)
     if input_dataset is None:

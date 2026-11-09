@@ -28,6 +28,7 @@ dependencies = [
     "requests",
     "boto3",
     "netcdf4",
+    "ulzw3",
     "h5py",
     "scipy",
     "shapely"
