@@ -227,6 +227,10 @@ def save_data_on_swath(
     fname = time.strftime(f"{reference_data_name}_{sensor_name}_%Y%m%d%H%M%S.nc")
 
     output_file = on_swath_path / fname
+
+    for var in preprocessor_data:
+        preprocessor_data[var].encoding.pop("compression", None)
+
     default_encoding = {"zlib": True, "complevel": 5}
     encoding = {
         var:
@@ -239,6 +243,9 @@ def save_data_on_swath(
         engine="h5netcdf",
         encoding=encoding
     )
+
+    for var in reference_data:
+        reference_data[var].encoding.pop("compression", None)
     encoding = {
         var: reference_data[var].encoding | default_encoding
         for var in reference_data
@@ -357,6 +364,8 @@ def save_data_gridded(
     output_file = gridded_path / fname
 
     default_encoding = {"zlib": True, "complevel": 5}
+    for var in preprocessor_data:
+        preprocessor_data[var].encoding.pop("compression", None)
     encoding = {
         var: preprocessor_data[var].encoding | default_encoding
         for var in preprocessor_data
@@ -364,6 +373,8 @@ def save_data_gridded(
     preprocessor_data.to_netcdf(
         output_file, group="input_data", encoding=encoding, engine="h5netcdf"
     )
+    for var in reference_data:
+        reference_data[var].encoding.pop("compression", None)
     encoding = {
         var: reference_data[var].encoding | default_encoding
         for var in reference_data
